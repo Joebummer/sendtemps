@@ -9,7 +9,7 @@ import {
   weatherIcon,
   scoreBand,
   drynessBand,
-} from './forecast.js?v=30';
+} from './forecast.js?v=31';
 
 // ---- Theme toggle ----
 (function () {
@@ -721,13 +721,15 @@ function renderTomorrowHourly(fc) {
   const bw = fc.tomorrowBestWindow;
 
   // ---- Best-window callout ----
+  // forecast.js caps the window at 5h so the pick is actionable ("go climbing
+  // 9am–2pm") rather than vague ("any time today"). Show the duration too.
   let callout = '';
   if (bw && bw.count >= 2) {
     const avg = Math.round(bw.avg);
     const band = scoreBand(avg);
     callout = `
-      <div class="best-window-callout ${band.color}" title="Best continuous window with score ≥ 60">
-        <span class="best-window-label">🎯 Best window</span>
+      <div class="best-window-callout ${band.color}" title="Best ${bw.count}h block with score ≥ 60 (capped at 5h)">
+        <span class="best-window-label">🎯 Best ${bw.count}h block</span>
         <span class="best-window-time">${formatHour12(bw.start)}–${formatHour12(bw.end)}</span>
         <span class="best-window-avg">avg ${avg}</span>
       </div>

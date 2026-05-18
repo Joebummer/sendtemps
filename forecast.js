@@ -540,31 +540,68 @@ function scoreHour(crag, h) {
   return Math.max(0, Math.min(100, Math.round(s)));
 }
 
-// Find the best continuous climbing window in a tomorrow-hourly array.
+// Find the best climbing window in a tomorrow-hourly array.
 // A "window" is any run of consecutive hours all scoring ≥ threshold.
-// Returns the highest-scoring window of length ≥ 2 hours, or null if none.
+// We first find every qualifying run, then — for each — slide a fixed-width
+// MAX_HOURS window across it and pick the highest-average sub-window. This
+// keeps the recommendation actionable: even on a bluebird day where 12 hours
+// all qualify, the user sees "best 5h block" rather than "any time, all day."
+//
+// Returns the highest-scoring window, or null if no run is long enough.
 export function bestWindow(hourly) {
   if (!hourly || hourly.length < 2) return null;
   const threshold = 60;
-  let bestRun = null;
+  const MIN_HOURS = 2;
+  const MAX_HOURS = 5;
+
+  // Step 1: collect every contiguous run of qualifying hours.
+  const runs = [];
   let cur = null;
+  const closeRun = () => {
+    if (cur && cur.hours.length >= MIN_HOURS) runs.push(cur);
+    cur = null;
+  };
   for (const h of hourly) {
     if (h.score >= threshold) {
-      if (!cur) cur = { start: h.hour, end: h.hour + 1, sumScore: h.score, count: 1, hours: [h] };
-      else { cur.end = h.hour + 1; cur.sumScore += h.score; cur.count++; cur.hours.push(h); }
-    } else if (cur) {
-      if (cur.count >= 2) {
-        const avg = cur.sumScore / cur.count;
-        if (!bestRun || avg > bestRun.avg || (avg === bestRun.avg && cur.count > bestRun.count)) {
-          bestRun = { ...cur, avg };
-        }
-      }
-      cur = null;
+      if (!cur) cur = { hours: [h] };
+      else cur.hours.push(h);
+    } else {
+      closeRun();
     }
   }
-  if (cur && cur.count >= 2) {
-    const avg = cur.sumScore / cur.count;
-    if (!bestRun || avg > bestRun.avg) bestRun = { ...cur, avg };
+  closeRun();
+  if (runs.length === 0) return null;
+
+  // Step 2: within each run, find the best fixed-width sub-window.
+  // For runs shorter than MAX_HOURS we just use the whole run.
+  let bestRun = null;
+  for (const run of runs) {
+    const n = run.hours.length;
+    const winLen = Math.min(MAX_HOURS, n);
+    let bestStart = 0;
+    let bestSum = -Infinity;
+    for (let i = 0; i + winLen <= n; i++) {
+      let sum = 0;
+      for (let j = 0; j < winLen; j++) sum += run.hours[i + j].score;
+      // Prefer earlier starts on ties so callers get a stable, intuitive pick
+      // ("start at 9am" beats "start at 10am" if both averages match).
+      if (sum > bestSum) { bestSum = sum; bestStart = i; }
+    }
+    const slice = run.hours.slice(bestStart, bestStart + winLen);
+    const avg = bestSum / winLen;
+    const candidate = {
+      start: slice[0].hour,
+      end: slice[slice.length - 1].hour + 1,
+      sumScore: bestSum,
+      count: winLen,
+      hours: slice,
+      avg,
+    };
+    // Pick the highest-avg sub-window across all runs; tie-break by length.
+    if (!bestRun || candidate.avg > bestRun.avg ||
+        (candidate.avg === bestRun.avg && candidate.count > bestRun.count)) {
+      bestRun = candidate;
+    }
   }
   return bestRun;
 }
