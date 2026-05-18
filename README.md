@@ -6,7 +6,7 @@ Pulls hourly forecasts from Open-Meteo for every crag, scores conditions against
 
 ## Crag coverage
 
-Day trip range (under 3h from Melbourne) plus weekend destinations across Victoria and Tasmania — Arapiles, Grampians, Buffalo, Cathedral Ranges, You Yangs, Camel's Hump, Werribee Gorge, Beckworth, Staughton Vale, Mt Alexander group, and more.
+Day trip range (under 3h from Melbourne) plus weekend destinations across Victoria — Arapiles, Grampians, Buffalo, Cathedral Ranges, You Yangs, Camel's Hump, Werribee Gorge, Beckworth, Staughton Vale, Mt Alexander group, and more.
 
 ## Stack
 
