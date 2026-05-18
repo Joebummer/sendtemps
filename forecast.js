@@ -86,6 +86,9 @@ export async function fetchAllForecasts() {
         // Dominant daytime wind direction + exposure for this crag (8am–6pm).
         // Used to label "drying wind" vs "sheltered" in the score breakdown.
         ...daytimeWindExposure(crag, f.hourly, date),
+        // Real solar exposure for this crag's wall on this day (geometry, not
+        // aspect labels). scoreDay uses these for the heat/cold/sunshine maths.
+        ...computeSolarExposure(crag, f.hourly, date),
         sunshine: f.daily.sunshine_duration[di], // seconds
         weatherCode: f.daily.weathercode[di],
         rainWindows: extractRainWindows(f.hourly, date),
@@ -163,6 +166,50 @@ function daytimeWindExposure(crag, hourly, dateStr) {
   const effective = Math.max(windAvg, gustAvg * 0.7);
   const { exposure } = aspectWindFactor(crag.aspect, windDir, effective);
   return { windDir, windAvg, windExposure: exposure };
+}
+
+// Per-day solar exposure for a crag wall. Walks each hourly cell of the local
+// date, calculates real sun position, and accumulates how many cloud-adjusted
+// hours the sun was on the wall — split into three windows that matter for
+// scoring:
+//   sunHoursOnWall      — all daylight hours (used for general sunshine bonus)
+//   sunHoursOnWallWarm  — 11am–4pm window (drives the heat penalty)
+//   sunHoursOnWallCool  — 8am–11am window  (drives the cold-morning bonus)
+// Each hour contributes (1 - cloudcover/100) so a cloudy 'lit' hour counts less.
+function computeSolarExposure(crag, hourly, dateStr) {
+  const empty = {
+    sunHoursOnWall: 0,
+    sunHoursOnWallWarm: 0,
+    sunHoursOnWallCool: 0,
+    sunHoursTotal: 0,
+  };
+  if (!hourly || !hourly.time || crag.lat == null || crag.lon == null) return empty;
+  // 'shade: all-day' crags are physically shaded by surrounding terrain that
+  // the geometric model can't see (deep gorge, overhang, boulder shelter).
+  // Honour the explicit override.
+  if (crag.shade === 'all-day') return empty;
+  let onWall = 0, warm = 0, cool = 0, total = 0;
+  for (let i = 0; i < hourly.time.length; i++) {
+    const t = hourly.time[i];
+    if (!t.startsWith(dateStr)) continue;
+    const hour = parseInt(t.slice(11, 13), 10);
+    const when = melbourneHourToDate(t);
+    const sun = sunPosition(when, crag.lat, crag.lon);
+    if (sun.altitude <= 3) continue;
+    const cloud = hourly.cloudcover?.[i] ?? 0;
+    const clear = Math.max(0, 1 - cloud / 100);
+    total += clear;
+    if (!sunOnAspect(crag.aspect, sun.azimuth, sun.altitude)) continue;
+    onWall += clear;
+    if (hour >= 11 && hour < 16) warm += clear;
+    if (hour >= 8 && hour < 11) cool += clear;
+  }
+  return {
+    sunHoursOnWall: onWall,
+    sunHoursOnWallWarm: warm,
+    sunHoursOnWallCool: cool,
+    sunHoursTotal: total,
+  };
 }
 
 // Smallest angle (0–180°) between two compass bearings.
@@ -805,73 +852,84 @@ export function scoreDay(crag, day, prevDay, nextDay) {
     add('temp', 'Temperature', 0, `${Math.round(t)}°C — inside ideal range (${idealMin}–${idealMax}°C)`);
   }
 
-  // — Aspect × heat interaction —
-  // North-facing walls bake in warm weather; south-facing stay cool.
-  // Sun hours scale the penalty/bonus: a cloudy 28°C day matters less than a sunny one.
+  // — Sun-on-wall × temperature interaction (true solar geometry) —
+  //
+  // Replaces the old aspect-string cascade with hour-by-hour solar exposure
+  // already computed in `day.sunHoursOnWall{,Warm,Cool}` (see
+  // computeSolarExposure). The wall might be N-facing but tucked behind a
+  // ridge that blocks the morning sun, or W-facing in winter when the sun
+  // never gets high enough to hit it. Geometry handles all of that.
+  //
+  //   warmHours = cloud-adjusted hours of sun on the wall during 11am–4pm
+  //   coolHours = cloud-adjusted hours of sun on the wall during 8am–11am
+  //   totalHours = cloud-adjusted hours of sun on the wall over the whole day
   const sunHours = (day.sunshine ?? 0) / 3600;
-  const sunFactor = Math.max(0.4, Math.min(1, sunHours / 8)); // 0.4 (cloudy) → 1.0 (8h+ sun)
+  const warmHours = day.sunHoursOnWallWarm ?? 0;
+  const coolHours = day.sunHoursOnWallCool ?? 0;
+  const onWallHours = day.sunHoursOnWall ?? 0;
 
-  // Hot zone (>22°C): full aspect signal. Mid-warm zone (18-22°C): half-strength.
-  const sunNote = `${Math.round(sunHours)}h sun, ${crag.aspect}-facing`;
+  // Hot day (>22°C): each hour of direct sun on the wall during the hottest
+  // part of the day adds a penalty. Capped so it can't dominate the score.
   if (t > 22) {
-    if (crag.aspect === 'N' || crag.aspect === 'NW' || crag.aspect === 'NE') {
-      const pen = Math.round(12 * sunFactor);
+    if (warmHours >= 0.5) {
+      const pen = Math.min(14, Math.round(warmHours * 3));
       score -= pen;
-      reasons.push('sun-baked aspect');
-      add('aspect', 'Aspect × heat', -pen, `sun-baked ${crag.aspect}-facing wall in warm temps`);
+      if (pen >= 6) reasons.push('sun-baked wall');
+      else if (t > 25 && warmHours > 2) reasons.push('afternoon sun-trap');
+      add('aspect', 'Sun on wall × heat', -pen, `${warmHours.toFixed(1)}h direct sun on wall during the hottest hours`);
     }
-    if (crag.aspect === 'W') {
-      const pen = Math.round(8 * sunFactor);
-      score -= pen;
-      if (t > 25) reasons.push('afternoon sun-trap');
-      add('aspect', 'Aspect × heat', -pen, `W-facing wall — afternoon sun-trap`);
-    }
-    if (crag.shade === 'all-day' || crag.aspect === 'S') {
-      const bon = Math.round(8 * sunFactor);
+    // Shade refuge: hot day AND the wall barely sees the sun in the warm window.
+    if (warmHours < 1 && onWallHours < 3) {
+      const bon = Math.min(8, Math.round(6 + (3 - Math.min(onWallHours, 3))));
       score += bon;
       reasons.push('shaded refuge');
-      add('aspect', 'Aspect × heat', +bon, `shaded refuge from heat`);
-    }
-    if (crag.shade === 'afternoon') {
-      const bon = Math.round(3 * sunFactor);
+      add('aspect', 'Shade × heat', +bon, `${onWallHours.toFixed(1)}h sun on wall — stays cool in the heat`);
+    } else if (warmHours < 2 && onWallHours < 5) {
+      // Afternoon-only shade still helps a bit.
+      const bon = 3;
       score += bon;
-      add('aspect', 'Aspect × heat', +bon, `afternoon shade available`);
+      add('aspect', 'Partial shade × heat', +bon, `${warmHours.toFixed(1)}h direct sun in the warm window — partial shade helps`);
     }
   } else if (t > 18) {
-    if (crag.aspect === 'N' || crag.aspect === 'NW') {
-      const pen = Math.round(5 * sunFactor);
+    // Mid-warm day: smaller signal, same direction.
+    if (warmHours >= 2) {
+      const pen = Math.min(7, Math.round(warmHours * 1.4));
       score -= pen;
-      add('aspect', 'Aspect × heat', -pen, `${crag.aspect}-facing in mid-warm temps`);
+      add('aspect', 'Sun on wall × warmth', -pen, `${warmHours.toFixed(1)}h direct sun during 11am–4pm`);
     }
-    if (crag.shade === 'all-day' || crag.aspect === 'S') {
-      const bon = Math.round(3 * sunFactor);
+    if (warmHours < 1 && onWallHours < 3) {
+      const bon = 3;
       score += bon;
-      add('aspect', 'Aspect × heat', +bon, `shaded — mild bonus`);
+      add('aspect', 'Shaded × warmth', +bon, `wall mostly in shade — mild bonus on a warm day`);
     }
   }
+
+  // Cold day (<8°C): morning sun on the wall is gold; full shade is grim.
   if (t < 8) {
-    if (crag.aspect === 'N' || crag.aspect === 'NE') {
-      const bon = Math.round(6 * sunFactor);
+    if (coolHours >= 0.5 || warmHours >= 1) {
+      const sunTrapHrs = coolHours + 0.5 * warmHours;
+      const bon = Math.min(10, Math.round(sunTrapHrs * 2.5));
       score += bon;
-      reasons.push('sun-trap aspect');
-      add('aspect', 'Aspect × cold', +bon, `${crag.aspect}-facing sun-trap on cold day`);
+      reasons.push('sun-trap wall');
+      add('aspect', 'Sun on wall × cold', +bon, `${coolHours.toFixed(1)}h morning sun + ${warmHours.toFixed(1)}h midday on wall — a real sun-trap`);
     }
-    if (crag.shade === 'all-day' || crag.aspect === 'S') {
-      const pen = Math.round(8 * sunFactor);
+    if (onWallHours < 1) {
+      const pen = 8;
       score -= pen;
       reasons.push('cold & shaded');
-      add('aspect', 'Aspect × cold', -pen, `cold and shaded`);
+      add('aspect', 'Shade × cold', -pen, `wall barely sees the sun — stays cold all day`);
     }
   } else if (t < 12) {
-    if (crag.aspect === 'N' || crag.aspect === 'NE') {
-      const bon = Math.round(3 * sunFactor);
+    if (coolHours >= 1 || warmHours >= 1.5) {
+      const sunTrapHrs = coolHours + 0.5 * warmHours;
+      const bon = Math.min(5, Math.round(sunTrapHrs * 1.4));
       score += bon;
-      add('aspect', 'Aspect × cool', +bon, `${crag.aspect}-facing — gentle sun bonus`);
+      add('aspect', 'Sun on wall × cool', +bon, `${onWallHours.toFixed(1)}h sun on wall on a cool day — takes the edge off`);
     }
-    if (crag.shade === 'all-day') {
-      const pen = Math.round(3 * sunFactor);
+    if (onWallHours < 1) {
+      const pen = 3;
       score -= pen;
-      add('aspect', 'Aspect × cool', -pen, `all-day shade in cool temps`);
+      add('aspect', 'Shade × cool', -pen, `wall in shade most of the day — stays cool`);
     }
   }
 
@@ -986,14 +1044,21 @@ export function scoreDay(crag, day, prevDay, nextDay) {
     }
   }
 
-  // — Sunshine bonus on cool days, weighted by aspect —
-  // Sun on a north-facing wall in winter is gold. On a south-facing wall, less so.
-  if (sunHours > 6 && t < 18) {
-    let bon = 3;
-    if (crag.aspect === 'N' || crag.aspect === 'NE' || crag.aspect === 'NW') bon = 5;
-    else if (crag.aspect === 'S' || crag.shade === 'all-day') bon = 1;
-    score += bon;
-    add('sun', 'Sunshine bonus', +bon, `${Math.round(sunHours)}h sun on a cool day · ${crag.aspect}-facing`);
+  // — Sunshine bonus on cool days, weighted by geometry —
+  // We already credited sun-trap walls above. Here we just give a small bonus
+  // when the overall day is sunny AND it's a cool day where warmth is welcome.
+  // The bonus scales with how much of that sun actually reaches the wall,
+  // rather than the aspect label.
+  if (sunHours > 6 && t < 18 && crag.shade !== 'all-day') {
+    // Ratio of wall-lit hours to total clear-sky daylight on this day.
+    // 0 = wall never sees the sun; 1 = wall is lit any time the sun is up.
+    const totalLit = day.sunHoursTotal ?? sunHours;
+    const exposureRatio = totalLit > 0.5 ? Math.min(1, onWallHours / totalLit) : 0;
+    const bon = Math.round(2 + 4 * exposureRatio); // 2 → 6 depending on exposure
+    if (bon > 0) {
+      score += bon;
+      add('sun', 'Sunshine bonus', +bon, `${Math.round(sunHours)}h sun overall · wall lit for ${onWallHours.toFixed(1)}h`);
+    }
   }
 
   const finalScore = Math.max(0, Math.min(100, Math.round(score)));
