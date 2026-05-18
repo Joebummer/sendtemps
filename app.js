@@ -453,6 +453,11 @@ function renderDestinationCard(dest, isTop) {
       </button>
       <div class="crag-detail" id="detail-dest-${safeDest}" role="region">
         ${destDailyScores.length ? renderDestinationBreakdown(destDailyScores) : ''}
+        ${(() => {
+          const fcDest = state.forecasts?.[bestForToday.crag.id];
+          const isTomorrowDest = !!(fcDest && fcDest.tomorrowDate && state.activeDate === fcDest.tomorrowDate);
+          return isTomorrowDest ? renderTomorrowHourly(fcDest) : '';
+        })()}
         ${renderPicksByDay(state.tripDates, bestPerDay)}
         <div class="detail-section">
           <div class="section-label">Sub-crags at this destination</div>
@@ -575,6 +580,12 @@ function renderCard(row, isTop, isWeekend) {
   // contributions if present — otherwise fall back to today's daily contributions.
   const dayContribs = row.contributions || [];
 
+  // Tomorrow hourly strip — shown only when the user is on the "tomorrow" tab
+  // for this crag's location. forecast.js precomputes tomorrowHourly + bestWindow.
+  const fc = state.forecasts?.[crag.id];
+  const isTomorrow = !!(fc && fc.tomorrowDate && state.activeDate === fc.tomorrowDate);
+  const tomorrowStrip = isTomorrow ? renderTomorrowHourly(fc) : '';
+
   return `
     <article class="crag-card ${isTop ? 'top' : ''}" data-open="false" data-id="${crag.id}">
       ${renderHideButton(crag.id, crag.name)}
@@ -608,6 +619,7 @@ function renderCard(row, isTop, isWeekend) {
           <p>${w.icon} ${w.label}. Feels like ${Math.round(day.tFeel || day.tMax)}°C. ${sunHours}h sun expected. ${day.precipSum > 0.2 ? `${day.precipSum.toFixed(1)}mm rain forecast.` : 'No measurable rain.'}${prevDay && prevDay.precipSum > 1 ? ` Yesterday saw ${prevDay.precipSum.toFixed(1)}mm.` : ''}</p>
         </div>
         ${renderRainTiming(day)}
+        ${tomorrowStrip}
         ${renderScoreBreakdown(dayContribs, score)}
         <div class="detail-section">
           <div class="section-label">Crag notes</div>
@@ -697,6 +709,96 @@ function renderScoreBreakdown(contributions, finalScore) {
       <p class="breakdown-note">${checkNote}</p>
     </details>
   `;
+}
+
+// ---- Tomorrow hourly strip + best-window callout ----
+//
+// Renders when the active date tab is tomorrow. Each cell covers one hour
+// (6am–7pm) and shows: time, weather icon, temp, sun-on-wall indicator,
+// wind arrow + exposure tint, dryness, and the per-hour score (0–100).
+function renderTomorrowHourly(fc) {
+  if (!fc || !Array.isArray(fc.tomorrowHourly) || fc.tomorrowHourly.length === 0) return '';
+  const bw = fc.tomorrowBestWindow;
+
+  // ---- Best-window callout ----
+  let callout = '';
+  if (bw && bw.count >= 2) {
+    const avg = Math.round(bw.avg);
+    const band = scoreBand(avg);
+    callout = `
+      <div class="best-window-callout ${band.color}" title="Best continuous window with score ≥ 60">
+        <span class="best-window-label">🎯 Best window</span>
+        <span class="best-window-time">${formatHour12(bw.start)}–${formatHour12(bw.end)}</span>
+        <span class="best-window-avg">avg ${avg}</span>
+      </div>
+    `;
+  } else {
+    callout = `
+      <div class="best-window-callout muted" title="No continuous 2h+ window scored ≥ 60">
+        <span class="best-window-label">🎯 Best window</span>
+        <span class="best-window-time">No standout window</span>
+      </div>
+    `;
+  }
+
+  // ---- Hour cells ----
+  const cells = fc.tomorrowHourly.map(h => {
+    const band = scoreBand(h.score);
+    const w = weatherIcon(h.weatherCode);
+    const dryClass = h.dryness == null
+      ? ''
+      : h.dryness >= 70 ? 'dry-good'
+      : h.dryness >= 50 ? 'dry-damp'
+      : 'dry-wet';
+    const sunCell = h.sunOnWall
+      ? `<span class="hour-sun lit" title="Sun on the wall (alt ${h.sunAlt}°)">☀️</span>`
+      : `<span class="hour-sun shade" title="Wall in shade">○</span>`;
+    const windArrow = h.windDir != null
+      ? `<span class="hour-wind wind-${h.windExposure || 'parallel'}" title="${Math.round(h.wind)} km/h ${compassFromDeg(h.windDir)} · ${h.windExposure || 'parallel'}" style="transform: rotate(${(h.windDir + 180) % 360}deg)">↑</span>`
+      : '<span class="hour-wind"></span>';
+    const inWindow = bw && h.hour >= bw.start && h.hour < bw.end ? 'in-window' : '';
+    return `
+      <div class="hour-cell ${dryClass} ${inWindow}" data-score="${h.score}">
+        <div class="hour-time">${formatHour12(h.hour)}</div>
+        <div class="hour-weather">${w.icon}</div>
+        <div class="hour-temp">${Math.round(h.temp)}°</div>
+        <div class="hour-sun-row">${sunCell}</div>
+        <div class="hour-wind-row">${windArrow}<span class="hour-wind-num">${Math.round(h.wind)}</span></div>
+        <div class="hour-dryness" title="Rock dryness ${h.dryness}/100">${h.dryness ?? '—'}</div>
+        <div class="hour-score ${band.color}">${h.score}</div>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="detail-section">
+      <div class="section-label">Tomorrow hour by hour</div>
+      ${callout}
+      <div class="hourly-strip" role="list" aria-label="Tomorrow's hourly forecast">
+        ${cells}
+      </div>
+      <div class="hourly-legend">
+        <span><strong>Time</strong></span>
+        <span><strong>☀️</strong> sun on wall</span>
+        <span><strong>↑</strong> wind direction (arrow points where wind is going); gold = onshore, grey = lee</span>
+        <span><strong>Dryness</strong> 0–100 · <strong>Score</strong> 0–100</span>
+      </div>
+    </div>
+  `;
+}
+
+function formatHour12(h) {
+  const hh = ((h % 24) + 24) % 24;
+  if (hh === 0) return '12am';
+  if (hh === 12) return '12pm';
+  if (hh < 12) return `${hh}am`;
+  return `${hh - 12}pm`;
+}
+
+function compassFromDeg(deg) {
+  if (deg == null) return '';
+  const dirs = ['N','NE','E','SE','S','SW','W','NW'];
+  return dirs[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
 }
 
 function renderDrynessLine(nowDryness, lastRain) {
