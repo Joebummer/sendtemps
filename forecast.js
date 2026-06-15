@@ -62,15 +62,26 @@ export async function fetchAllForecasts() {
     const drynessSeries = computeDrynessSeries(crag, f.hourly);
     // Current dryness = the value at the hour closest to "now".
     const nowDryness = currentDryness(f.hourly, drynessSeries);
-    // Per-hour view for tomorrow + best climbing window.
+    // Per-hour view for today (remaining hours) and tomorrow, each with its
+    // own best-window pick. The today strip is built from the current hour
+    // forward, so a 2pm visit sees 2pm–7pm rather than the irrelevant
+    // 6am–1pm that have already passed.
+    const todayHourly = buildTodayHourly(crag, f.hourly, drynessSeries, todayMel);
+    const todayBestWindow = bestWindow(todayHourly);
     const tomorrowHourly = buildTomorrowHourly(crag, f.hourly, drynessSeries, tomorrowMel);
     const tomorrowBestWindow = bestWindow(tomorrowHourly);
+    // Last 4 days of daily precipitation totals for the sparkline.
+    const pastPrecip = extractPastDailyPrecip(f.hourly, todayMel, 4);
     byId[crag.id] = {
       crag,
       hourly: f.hourly,
       drynessSeries,
       nowDryness,
       lastRain: findLastSignificantRain(f.hourly),
+      pastPrecip,
+      todayDate: todayMel,
+      todayHourly,
+      todayBestWindow,
       tomorrowDate: tomorrowMel,
       tomorrowHourly,
       tomorrowBestWindow,
@@ -453,18 +464,21 @@ function melbourneOffsetMinutes(date) {
   return (localMs - date.getTime()) / 60000;
 }
 
-// Build hourly strip data for tomorrow on a given crag: array of objects
+// Build hourly strip data for a given crag and date. Array of objects
 // { hour, isoHour, temp, wind, precip, precipProb, cloud, weatherCode, dryness,
-//   sunAlt, sunAz, sunOnWall, score, scoreReasons } limited to climbable hours
-// (default 6am–6pm).
-function buildTomorrowHourly(crag, hourly, drynessSeries, tomorrowDate) {
+//   sunAlt, sunAz, sunOnWall, score, isNow } limited to climbable hours
+// (default 6am–7pm). For "today" pass `fromHour = currentMelbourneHour` so
+// past hours are dropped from the strip.
+function buildDayHourly(crag, hourly, drynessSeries, dateStr, fromHour = 6, toHour = 19) {
   if (!hourly || !hourly.time || !drynessSeries.length) return [];
   const out = [];
+  const nowHour = melbourneHourNow();
+  const isTodayStrip = dateStr === melbourneDateString(new Date());
   for (let i = 0; i < hourly.time.length; i++) {
     const t = hourly.time[i];
-    if (!t.startsWith(tomorrowDate)) continue;
+    if (!t.startsWith(dateStr)) continue;
     const hour = parseInt(t.slice(11, 13), 10);
-    if (hour < 6 || hour > 19) continue; // 6am–7pm window
+    if (hour < fromHour || hour > toHour) continue;
     const when = melbourneHourToDate(t);
     const sun = sunPosition(when, crag.lat, crag.lon);
     const lit = sunOnAspect(crag.aspect, sun.azimuth, sun.altitude);
@@ -489,6 +503,9 @@ function buildTomorrowHourly(crag, hourly, drynessSeries, tomorrowDate) {
       sunAlt: Math.round(sun.altitude),
       sunAz: Math.round(sun.azimuth),
       sunOnWall: lit,
+      // Mark the cell whose hour matches the current Melbourne hour so the UI
+      // can highlight "now" on the today strip. False for tomorrow/future.
+      isNow: isTodayStrip && hour === nowHour,
     });
   }
   // Now score each hour and find the best window.
@@ -496,6 +513,27 @@ function buildTomorrowHourly(crag, hourly, drynessSeries, tomorrowDate) {
     h.score = scoreHour(crag, h);
   }
   return out;
+}
+
+// Thin wrapper kept for clarity at call sites.
+function buildTomorrowHourly(crag, hourly, drynessSeries, tomorrowDate) {
+  return buildDayHourly(crag, hourly, drynessSeries, tomorrowDate, 6, 19);
+}
+
+// For the today strip we drop hours already past so the strip is forward-looking.
+// We always keep the *current* hour (use floor of now).
+function buildTodayHourly(crag, hourly, drynessSeries, todayDate) {
+  const fromHour = Math.max(6, melbourneHourNow());
+  return buildDayHourly(crag, hourly, drynessSeries, todayDate, fromHour, 19);
+}
+
+// Current hour-of-day in Melbourne local time, as an integer 0–23.
+function melbourneHourNow() {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Australia/Melbourne', hour: '2-digit', hour12: false,
+  }).formatToParts(new Date());
+  const h = parts.find(p => p.type === 'hour')?.value ?? '0';
+  return parseInt(h, 10) % 24;
 }
 
 // Score a single hour 0–100 for climbing quality at this crag.
@@ -679,6 +717,30 @@ function drynessAtLocalHour(hourly, series, dateStr, hour) {
 
 // Find the most recent significant rain event (≥0.5mm hour) before or at "now".
 // Returns { hoursAgo, totalMm, peakHour } or null.
+// Per-day precipitation totals for the N days immediately before `todayDate`.
+// Returns array of { date, mm } in chronological order (oldest first). Used
+// for the past-rain sparkline under each crag card so the user can see at a
+// glance whether the crag has been hammered all week or has been dry.
+function extractPastDailyPrecip(hourly, todayDate, days = 4) {
+  if (!hourly || !hourly.time) return [];
+  // Build a date → [precipMm] map by scanning hourly precip arrays.
+  const totals = new Map();
+  for (let i = 0; i < hourly.time.length; i++) {
+    const t = hourly.time[i];
+    const date = t.slice(0, 10);
+    if (date >= todayDate) continue; // strictly past
+    const mm = hourly.precipitation?.[i] ?? 0;
+    totals.set(date, (totals.get(date) ?? 0) + mm);
+  }
+  // Convert the last N entries (sorted) into the result.
+  const sorted = Array.from(totals.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  const slice = sorted.slice(-days);
+  return slice.map(([date, mm]) => ({
+    date,
+    mm: Math.round(mm * 10) / 10,
+  }));
+}
+
 function findLastSignificantRain(hourly) {
   if (!hourly || !hourly.time) return null;
   const nowIdx = nearestHourIndex(hourly.time, new Date());
@@ -1139,6 +1201,7 @@ export function rankByDay(forecasts, dayDates) {
         contributions,
         nowDryness: fc.nowDryness,
         lastRain: fc.lastRain,
+        pastPrecip: fc.pastPrecip,
       });
     }
     rows.sort((a, b) => b.score - a.score);
@@ -1183,6 +1246,7 @@ export function rankWeekendTrip(forecasts, tripDates) {
       worstScore: worst.score,
       nowDryness: fc.nowDryness,
       lastRain: fc.lastRain,
+      pastPrecip: fc.pastPrecip,
     };
   }
   // Return as ranked array

@@ -1182,3 +1182,115 @@ html[data-theme="dark"] .reason-tag-closed {
   color: var(--color-text-muted);
   line-height: 1.4;
 }
+
+/* ---- v56 additions: favourites, sparkline, wind glyph, today-strip ---- */
+
+/* Favourite star button — sits to the left of the hide button. Click is
+   bound on the button itself; stopPropagation in JS keeps it from triggering
+   the card's expand/collapse handler. */
+.favourite-btn {
+  position: absolute;
+  top: 10px;
+  right: 42px;
+  z-index: 2;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  border: none;
+  background: color-mix(in oklab, var(--color-text) 8%, transparent);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s, color 0.15s, transform 0.15s;
+}
+.favourite-btn:hover { background: color-mix(in oklab, var(--color-text) 14%, transparent); color: var(--color-text); }
+.favourite-btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.favourite-btn:active { transform: scale(0.92); }
+.favourite-btn.active { color: #e8b923; background: color-mix(in oklab, #e8b923 18%, transparent); }
+.favourite-btn.active:hover { background: color-mix(in oklab, #e8b923 28%, transparent); }
+
+/* Past-rain sparkline — sits between the dryness pill and the reason tags
+   inside the card header info column. Compact, decorative; not focusable. */
+.past-rain-sparkline {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--color-text) 4%, transparent);
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  line-height: 1;
+}
+.past-rain-sparkline .spark-label,
+.past-rain-sparkline .spark-total {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+}
+.past-rain-sparkline .spark-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 18px;
+}
+.past-rain-sparkline .spark-bar {
+  display: inline-block;
+  width: 4px;
+  border-radius: 1px;
+  background: var(--color-text-muted);
+  opacity: 0.55;
+}
+.past-rain-sparkline .spark-bar.dry  { background: color-mix(in oklab, var(--color-success) 70%, var(--color-text-muted)); }
+.past-rain-sparkline .spark-bar.damp { background: color-mix(in oklab, var(--color-warning) 80%, var(--color-text-muted)); }
+.past-rain-sparkline .spark-bar.wet  { background: var(--color-error); opacity: 0.85; }
+
+/* Wind strength glyph — four micro-bars sitting alongside the wind arrow.
+   Active bars inherit the arrow's exposure tint via the wind-* modifier. */
+.hour-wind-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 12px;
+  margin-left: 2px;
+}
+.hour-wind-bars i {
+  display: inline-block;
+  width: 2px;
+  background: currentColor;
+  opacity: 0.18;
+  border-radius: 1px;
+}
+.hour-wind-bars i:nth-child(1) { height: 4px; }
+.hour-wind-bars i:nth-child(2) { height: 6px; }
+.hour-wind-bars i:nth-child(3) { height: 9px; }
+.hour-wind-bars i:nth-child(4) { height: 12px; }
+.hour-wind-bars i.on { opacity: 1; }
+.hour-wind-bars.wind-onshore  { color: #d4a017; }
+.hour-wind-bars.wind-parallel { color: var(--color-text-muted); }
+.hour-wind-bars.wind-lee      { color: var(--color-text-faint); }
+
+/* Today strip — highlight the cell representing the current hour so the
+   user instantly sees where they are in the day. */
+.hour-cell.is-now {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+  background: color-mix(in oklab, var(--color-accent) 12%, var(--color-surface-2));
+}
+.hour-cell .hour-now-tag {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 5px;
+  font-size: 0.6rem;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent);
+  color: var(--color-accent-contrast, #fff);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}

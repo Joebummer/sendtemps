@@ -9,7 +9,7 @@ import {
   weatherIcon,
   scoreBand,
   drynessBand,
-} from './forecast.js?v=32';
+} from './forecast.js?v=33';
 
 // ---- Theme toggle ----
 (function () {
@@ -27,27 +27,22 @@ import {
   t.addEventListener('click', () => { d = d === 'dark' ? 'light' : 'dark'; apply(); });
 })();
 
-// ---- Anonymous pageview ping ----
-// Visitor ID = SHA-256 of (UA + screen size + Melbourne date), truncated.
-// Rotates daily so visitors aren't trackable across days.
-(async function () {
-  try {
-    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Melbourne' }).format(new Date());
-    const seed = `${navigator.userAgent}|${screen.width}x${screen.height}|${today}`;
-    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(seed));
-    const visitor = Array.from(new Uint8Array(buf)).slice(0, 8)
-      .map(b => b.toString(16).padStart(2, '0')).join('');
-    fetch('/__PORT_5000__/api/hit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ visitor }),
-      keepalive: true,
-    }).catch(() => {});
-  } catch { /* no-op */ }
-})();
+// Pageview tracking lives in index.html via GoatCounter (cookie-free, no
+// banner needed). No app-side analytics code needed.
+
+// ---- Service worker registration ----
+// Caches the static shell + last good forecast so SendTemps loads at the crag
+// even with no signal. The SW handles its own update lifecycle — we just kick
+// it off here and let it stream in updates.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => { /* offline fine */ });
+  });
+}
 
 // ---- App state ----
 const HIDDEN_KEY = 'sendtemps:hidden';
+const FAV_KEY = 'sendtemps:favourites';
 // Access browser storage indirectly so static analyzers don't flag this PWA.
 // The published site (sendtemps.pplx.app) runs outside the iframe sandbox where
 // the storage API is fully available; this is a real iOS home-screen PWA.
@@ -77,6 +72,34 @@ function toggleHidden(cragId) {
   renderDay();
 }
 
+// ---- Favourites ----
+// Same pattern as hidden crags but a separate Set so the two concerns don't
+// interact. A favourite is pinned to the top of the day-trip list across all
+// date tabs, irrespective of score — useful for Sean's usual rotation.
+function loadFavourites() {
+  try {
+    if (!_storage) return new Set();
+    const raw = _storage.getItem(FAV_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch { return new Set(); }
+}
+
+function saveFavourites() {
+  try {
+    if (!_storage) return;
+    _storage.setItem(FAV_KEY, JSON.stringify([...state.favouriteCrags]));
+  } catch { /* storage blocked */ }
+}
+
+function toggleFavourite(cragId) {
+  if (state.favouriteCrags.has(cragId)) state.favouriteCrags.delete(cragId);
+  else state.favouriteCrags.add(cragId);
+  saveFavourites();
+  renderDay();
+}
+
 const state = {
   forecasts: null,
   ranked: null,
@@ -85,6 +108,7 @@ const state = {
   dates: [],            // 7 dates: today + next 6, used for tabs
   activeDate: null,
   hiddenCrags: loadHidden(),
+  favouriteCrags: loadFavourites(),
 };
 
 // ---- Render functions ----
@@ -150,7 +174,14 @@ function renderDay() {
         daySubCrags: subs,
       };
     })
-    .sort((a, b) => b.score - a.score);
+    // Favourites float to the top irrespective of score; within each group
+    // we still sort by score so the best favourite leads the list.
+    .sort((a, b) => {
+      const af = state.favouriteCrags.has(a.crag.id) ? 1 : 0;
+      const bf = state.favouriteCrags.has(b.crag.id) ? 1 : 0;
+      if (af !== bf) return bf - af;
+      return b.score - a.score;
+    });
 
   // Weekend Away rows: ordered by Fri–Sun trip score (same order on every tab),
   // but each row shows that day's daily forecast/score.
@@ -234,7 +265,15 @@ function groupByDestination(weekendRows) {
       .filter(Boolean);
     out.push(group);
   }
-  out.sort((a, b) => b.tripScore - a.tripScore);
+  // Favourited destinations float to the top (key = `dest:<name>`) so Sean's
+  // usual rotation surfaces regardless of weather. Within each tier we still
+  // sort by trip score.
+  out.sort((a, b) => {
+    const af = state.favouriteCrags.has(`dest:${a.destination}`) ? 1 : 0;
+    const bf = state.favouriteCrags.has(`dest:${b.destination}`) ? 1 : 0;
+    if (af !== bf) return bf - af;
+    return b.tripScore - a.tripScore;
+  });
   return out;
 }
 
@@ -309,6 +348,15 @@ function renderSplitRanked(dayRows, destinations) {
       e.stopPropagation();
       e.preventDefault();
       toggleHidden(btn.dataset.hideId);
+    });
+  });
+
+  // Favourite star buttons (★/☆).
+  list.querySelectorAll('.favourite-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      toggleFavourite(btn.dataset.favId);
     });
   });
 
@@ -396,6 +444,49 @@ function renderHideButton(id, label) {
   `;
 }
 
+// Favourite star button — sibling of the crag header so its click doesn't
+// bubble into the expand/collapse handler. Active state is driven by
+// state.favouriteCrags so a re-render reflects the toggle instantly.
+function renderFavouriteButton(id, label) {
+  const active = state.favouriteCrags.has(id);
+  const aria = active ? `Unpin ${label}` : `Pin ${label} to the top`;
+  return `
+    <button type="button" class="favourite-btn${active ? ' active' : ''}"
+      data-fav-id="${escapeHtml(id)}"
+      aria-label="${escapeHtml(aria)}"
+      aria-pressed="${active}"
+      title="${escapeHtml(aria)}">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="${active ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+      </svg>
+    </button>
+  `;
+}
+
+// Past-rain sparkline: 4 thin vertical bars (oldest → today) showing daily mm.
+// Bars are normalised to whichever is higher of the local 4-day max or 10mm
+// so a calm week reads as visibly dry, not a row of full-height bars. Hides
+// itself if no data — cheap to call on every card.
+function renderPastRainSparkline(pastPrecip) {
+  if (!Array.isArray(pastPrecip) || pastPrecip.length === 0) return '';
+  const maxMm = Math.max(10, ...pastPrecip.map(p => p.mm || 0));
+  const bars = pastPrecip.map(p => {
+    const mm = p.mm || 0;
+    const h = Math.max(2, Math.round((mm / maxMm) * 18));
+    const cls = mm >= 5 ? 'wet' : mm >= 1 ? 'damp' : 'dry';
+    const label = `${shortDayName(p.date)} · ${mm.toFixed(1)}mm`;
+    return `<span class="spark-bar ${cls}" style="height:${h}px" title="${escapeHtml(label)}"></span>`;
+  }).join('');
+  const totalMm = pastPrecip.reduce((s, p) => s + (p.mm || 0), 0);
+  return `
+    <div class="past-rain-sparkline" title="Rain over the last ${pastPrecip.length} days — total ${totalMm.toFixed(1)}mm">
+      <span class="spark-label">${pastPrecip.length}d</span>
+      <span class="spark-bars" aria-hidden="true">${bars}</span>
+      <span class="spark-total">${totalMm.toFixed(1)}mm</span>
+    </div>
+  `;
+}
+
 function renderHiddenFooter(items) {
   if (!items.length) return '';
   const rows = items.map(it => `
@@ -434,6 +525,7 @@ function renderDestinationCard(dest, isTop) {
 
   return `
     <article class="crag-card destination-card ${isTop ? 'top' : ''}" data-open="false" data-id="dest-${safeDest}">
+      ${renderFavouriteButton(`dest:${destination}`, destination)}
       ${renderHideButton(`dest:${destination}`, destination)}
       <button class="crag-header" aria-expanded="false" aria-controls="detail-dest-${safeDest}">
         <div class="score-pill ${band.color}" aria-label="Trip score ${tripScore} out of 100">
@@ -445,6 +537,7 @@ function renderDestinationCard(dest, isTop) {
           <div class="area">${drive} from Melbourne · ${namedSubCrags.length} crag${namedSubCrags.length === 1 ? '' : 's'}</div>
           <div class="day-score-note">Today's best: <strong>${escapeHtml(bestForToday.crag.name)}</strong> · ${bestForToday.score}/100</div>
           ${renderDrynessLine(bestForToday.nowDryness, bestForToday.lastRain, daysAheadOfActive())}
+          ${renderPastRainSparkline(state.forecasts?.[bestForToday.crag.id]?.pastPrecip)}
           <div class="reasons">${reasonsHtml}</div>
         </div>
         <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -455,8 +548,10 @@ function renderDestinationCard(dest, isTop) {
         ${destDailyScores.length ? renderDestinationBreakdown(destDailyScores) : ''}
         ${(() => {
           const fcDest = state.forecasts?.[bestForToday.crag.id];
-          const isTomorrowDest = !!(fcDest && fcDest.tomorrowDate && state.activeDate === fcDest.tomorrowDate);
-          return isTomorrowDest ? renderTomorrowHourly(fcDest) : '';
+          if (!fcDest) return '';
+          if (fcDest.todayDate && state.activeDate === fcDest.todayDate) return renderHourlyStrip(fcDest, 'today');
+          if (fcDest.tomorrowDate && state.activeDate === fcDest.tomorrowDate) return renderHourlyStrip(fcDest, 'tomorrow');
+          return '';
         })()}
         ${renderPicksByDay(state.tripDates, bestPerDay)}
         <div class="detail-section">
@@ -580,14 +675,18 @@ function renderCard(row, isTop, isWeekend) {
   // contributions if present — otherwise fall back to today's daily contributions.
   const dayContribs = row.contributions || [];
 
-  // Tomorrow hourly strip — shown only when the user is on the "tomorrow" tab
-  // for this crag's location. forecast.js precomputes tomorrowHourly + bestWindow.
+  // Hourly strips — shown on the today and tomorrow tabs. forecast.js
+  // precomputes both hourly + bestWindow slices.
   const fc = state.forecasts?.[crag.id];
   const isTomorrow = !!(fc && fc.tomorrowDate && state.activeDate === fc.tomorrowDate);
-  const tomorrowStrip = isTomorrow ? renderTomorrowHourly(fc) : '';
+  const isToday    = !!(fc && fc.todayDate    && state.activeDate === fc.todayDate);
+  const tomorrowStrip = isTomorrow ? renderHourlyStrip(fc, 'tomorrow') : '';
+  const todayStrip    = isToday    ? renderHourlyStrip(fc, 'today')    : '';
+  const sparkline = renderPastRainSparkline(fc?.pastPrecip);
 
   return `
     <article class="crag-card ${isTop ? 'top' : ''}" data-open="false" data-id="${crag.id}">
+      ${renderFavouriteButton(crag.id, crag.name)}
       ${renderHideButton(crag.id, crag.name)}
       <button class="crag-header" aria-expanded="false" aria-controls="detail-${crag.id}">
         <div class="score-pill ${band.color}" aria-label="Score ${headlineScore} out of 100">
@@ -600,6 +699,7 @@ function renderCard(row, isTop, isWeekend) {
           ${isWeekend && tripScore != null ? `<div class="day-score-note">Today scores <strong>${score}</strong> on its own</div>` : ''}
           ${bestSubCragName ? `<div class="day-score-note">Best: <strong>${escapeHtml(bestSubCragName)}</strong></div>` : ''}
           ${renderDrynessLine(nowDryness, lastRain, daysAheadOfActive())}
+          ${sparkline}
           <div class="reasons">${reasonsHtml}</div>
         </div>
         <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -619,6 +719,7 @@ function renderCard(row, isTop, isWeekend) {
           <p>${w.icon} ${w.label}. Feels like ${Math.round(day.tFeel || day.tMax)}°C. ${sunHours}h sun expected. ${day.precipSum > 0.2 ? `${day.precipSum.toFixed(1)}mm rain forecast.` : 'No measurable rain.'}${prevDay && prevDay.precipSum > 1 ? ` Yesterday saw ${prevDay.precipSum.toFixed(1)}mm.` : ''}</p>
         </div>
         ${renderRainTiming(day)}
+        ${todayStrip}
         ${tomorrowStrip}
         ${renderScoreBreakdown(dayContribs, score)}
         <div class="detail-section">
@@ -711,21 +812,27 @@ function renderScoreBreakdown(contributions, finalScore) {
   `;
 }
 
-// ---- Tomorrow hourly strip + best-window callout ----
+// ---- Hourly strip + best-window callout ----
 //
-// Renders when the active date tab is tomorrow. Each cell covers one hour
-// (6am–7pm) and shows: time, weather icon, temp, sun-on-wall indicator,
-// wind arrow + exposure tint, dryness, and the per-hour score (0–100).
-function renderTomorrowHourly(fc) {
-  if (!fc || !Array.isArray(fc.tomorrowHourly) || fc.tomorrowHourly.length === 0) return '';
-  const bw = fc.tomorrowBestWindow;
+// Renders when the active date tab is today or tomorrow. Each cell covers one
+// hour and shows: time, weather icon, temp, sun-on-wall indicator, wind arrow
+// + bars + exposure tint, dryness, and the per-hour score (0–100). For the
+// today strip the cell matching the current Melbourne hour gets an `is-now`
+// highlight; for the 9am–6pm "good all day" case the whole run is outlined.
+function renderHourlyStrip(fc, mode = 'tomorrow') {
+  const hours = mode === 'today' ? fc?.todayHourly : fc?.tomorrowHourly;
+  const bw = mode === 'today' ? fc?.todayBestWindow : fc?.tomorrowBestWindow;
+  if (!fc || !Array.isArray(hours) || hours.length === 0) return '';
+  const sectionTitle = mode === 'today' ? 'Rest of today hour by hour' : 'Tomorrow hour by hour';
 
   // ---- Best-window callout ----
   // forecast.js caps the picked sub-window at 5h so the recommendation is
   // actionable ("go climbing 9am–2pm") rather than vague. But when the
   // underlying run blankets the climbable day (9am–6pm fully covered with
   // score ≥ 60), pointing at one 5h slice is misleading — the whole day is
-  // genuinely good. Flag that case explicitly.
+  // genuinely good. Flag that case explicitly. On the today strip the window
+  // may already be partially in the past, but we still show it — it represents
+  // the rest-of-day pick.
   let callout = '';
   if (bw && bw.count >= 2) {
     const avg = Math.round(bw.avg);
@@ -770,7 +877,7 @@ function renderTomorrowHourly(fc) {
   const highlightEnd   = goodAllDay ? bw.runEnd   : (bw ? bw.end   : null);
 
   // ---- Hour cells ----
-  const cells = fc.tomorrowHourly.map(h => {
+  const cells = hours.map(h => {
     const band = scoreBand(h.score);
     const w = weatherIcon(h.weatherCode);
     const dryClass = h.dryness == null
@@ -784,14 +891,22 @@ function renderTomorrowHourly(fc) {
     const windArrow = h.windDir != null
       ? `<span class="hour-wind wind-${h.windExposure || 'parallel'}" title="${Math.round(h.wind)} km/h ${compassFromDeg(h.windDir)} · ${h.windExposure || 'parallel'}" style="transform: rotate(${(h.windDir + 180) % 360}deg)">↑</span>`
       : '<span class="hour-wind"></span>';
+    // Wind strength glyph: 1–4 vertical bars based on effective wind speed
+    // (max of mean and 0.7× gusts). Matches the gold/grey exposure tint of the
+    // arrow so they read as one signal at a glance.
+    const gust = h.windGust != null ? h.windGust : h.wind;
+    const effective = Math.max(h.wind || 0, (gust || 0) * 0.7);
+    const bars = effective > 35 ? 4 : effective > 20 ? 3 : effective > 10 ? 2 : 1;
+    const barsHtml = `<span class="hour-wind-bars wind-${h.windExposure || 'parallel'} bars-${bars}" title="Effective wind ${Math.round(effective)} km/h" aria-hidden="true">${Array.from({length: 4}, (_, i) => `<i class="${i < bars ? 'on' : ''}"></i>`).join('')}</span>`;
     const inWindow = highlightStart != null && h.hour >= highlightStart && h.hour < highlightEnd ? 'in-window' : '';
+    const isNow = mode === 'today' && h.isNow ? 'is-now' : '';
     return `
-      <div class="hour-cell ${dryClass} ${inWindow}" data-score="${h.score}">
-        <div class="hour-time">${formatHour12(h.hour)}</div>
+      <div class="hour-cell ${dryClass} ${inWindow} ${isNow}" data-score="${h.score}">
+        <div class="hour-time">${formatHour12(h.hour)}${isNow ? ' <span class="hour-now-tag">now</span>' : ''}</div>
         <div class="hour-weather">${w.icon}</div>
         <div class="hour-temp">${Math.round(h.temp)}°</div>
         <div class="hour-sun-row">${sunCell}</div>
-        <div class="hour-wind-row">${windArrow}<span class="hour-wind-num">${Math.round(h.wind)}</span></div>
+        <div class="hour-wind-row">${windArrow}${barsHtml}<span class="hour-wind-num">${Math.round(h.wind)}</span></div>
         <div class="hour-dryness" title="Rock dryness ${h.dryness}/100">${h.dryness ?? '—'}</div>
         <div class="hour-score ${band.color}">${h.score}</div>
       </div>
@@ -800,20 +915,23 @@ function renderTomorrowHourly(fc) {
 
   return `
     <div class="detail-section">
-      <div class="section-label">Tomorrow hour by hour</div>
+      <div class="section-label">${sectionTitle}</div>
       ${callout}
-      <div class="hourly-strip" role="list" aria-label="Tomorrow's hourly forecast">
+      <div class="hourly-strip" role="list" aria-label="${mode === 'today' ? "Today's remaining hourly forecast" : "Tomorrow's hourly forecast"}">
         ${cells}
       </div>
       <div class="hourly-legend">
         <span><strong>Time</strong></span>
         <span><strong>☀️</strong> sun on wall</span>
-        <span><strong>↑</strong> wind direction (arrow points where wind is going); gold = onshore, grey = lee</span>
+        <span><strong>↑</strong> wind direction (arrow points where wind is going); gold = onshore, grey = lee. Bars show strength.</span>
         <span><strong>Dryness</strong> 0–100 · <strong>Score</strong> 0–100</span>
       </div>
     </div>
   `;
 }
+
+// Back-compat wrapper so any remaining callsites still work.
+function renderTomorrowHourly(fc) { return renderHourlyStrip(fc, 'tomorrow'); }
 
 function formatHour12(h) {
   const hh = ((h % 24) + 24) % 24;
