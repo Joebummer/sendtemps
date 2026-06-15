@@ -878,42 +878,64 @@ function formatHourRange(startH, endH) {
   return `${fmt(startH)}–${fmt(endH)}`;
 }
 
-// Cutoff hour after which rain doesn't matter (you're not climbing in the dark).
-// Day trips: 6pm. Weekend trips: 8pm (later light at the destination + post-climb wind-down).
+// Climbable hour window. Rain outside this window doesn't ruin the day at the
+// daily-score level (the hourly model + dryness already capture lingering wet-rock
+// effects from pre-window rain).
+//   start: typical earliest climbing start — 9am gives time for the rock to dry
+//     after a dawn shower, plus the drive in. Weekend trips can start earlier
+//     because you're already onsite.
+//   end:   you're not climbing in the dark. Day trips: 6pm. Weekend trips: 8pm.
+function climbStartHour(crag) {
+  return (crag.trip === 'weekend' || crag.trip === 'both') ? 8 : 9;
+}
 function climbCutoffHour(crag) {
   return (crag.trip === 'weekend' || crag.trip === 'both') ? 20 : 18;
 }
 
-// Returns { sum, peakProb } for rain that falls during climbable hours only (before cutoff).
-// If a window straddles the cutoff, only the portion before cutoff is counted (proportional).
-function climbableRain(day, cutoffH) {
+// Returns { sum, peakProb } for rain that falls during climbable hours only
+// (between climbStart and cutoff). A window that straddles either bound is
+// counted proportionally by overlap. Windows fully outside the climbing day
+// (pre-dawn drizzle, or post-cutoff evening rain) don't contribute to the
+// daily rain penalty — dryness handles their carry-over effect.
+function climbableRain(day, startH, cutoffH) {
   const windows = day.rainWindows || [];
   if (!windows.length) {
-    return { sum: day.precipSum || 0, peakProb: day.precipProb || 0, allAfterDark: false };
+    return { sum: day.precipSum || 0, peakProb: day.precipProb || 0, allAfterDark: false, sumBeforeClimb: 0, sumAfter: 0 };
   }
-  let sumBefore = 0;
-  let peakBefore = 0;
-  let sumAfter = 0;
+  let sumDuring = 0;
+  let peakDuring = 0;
+  let sumBeforeClimb = 0; // rain that finished before climbing starts (e.g. dawn shower)
+  let sumAfter = 0;       // rain after cutoff (post-dark)
   for (const w of windows) {
     const span = Math.max(1, w.endHour - w.startHour);
-    if (w.endHour <= cutoffH) {
-      sumBefore += w.totalMm;
-      peakBefore = Math.max(peakBefore, w.peakProb);
-    } else if (w.startHour >= cutoffH) {
+    // Fully before climb starts
+    if (w.endHour <= startH) {
+      sumBeforeClimb += w.totalMm;
+      continue;
+    }
+    // Fully after cutoff
+    if (w.startHour >= cutoffH) {
       sumAfter += w.totalMm;
-    } else {
-      // Straddles: split proportionally by hours.
-      const beforeFrac = (cutoffH - w.startHour) / span;
-      sumBefore += w.totalMm * beforeFrac;
-      sumAfter += w.totalMm * (1 - beforeFrac);
-      // If the peak hour is before cutoff, count its prob.
-      if (w.peakHour < cutoffH) peakBefore = Math.max(peakBefore, w.peakProb);
+      continue;
+    }
+    // Some overlap with the climbing window
+    const overlapStart = Math.max(w.startHour, startH);
+    const overlapEnd = Math.min(w.endHour, cutoffH);
+    const duringFrac = Math.max(0, overlapEnd - overlapStart) / span;
+    const beforeFrac = w.startHour < startH ? (startH - w.startHour) / span : 0;
+    const afterFrac = w.endHour > cutoffH ? (w.endHour - cutoffH) / span : 0;
+    sumDuring += w.totalMm * duringFrac;
+    sumBeforeClimb += w.totalMm * beforeFrac;
+    sumAfter += w.totalMm * afterFrac;
+    // Only count peak prob if the peak hour falls inside the climbing window.
+    if (w.peakHour >= overlapStart && w.peakHour < overlapEnd) {
+      peakDuring = Math.max(peakDuring, w.peakProb);
     }
   }
-  // If we identified climbable rain, use it. If everything is after dark and nothing before,
-  // peakBefore stays 0 and sumBefore is ~0 — those values flow into scoring.
-  const allAfterDark = sumBefore < 0.2 && sumAfter >= 0.2;
-  return { sum: sumBefore, peakProb: peakBefore, allAfterDark, sumAfter };
+  // "allAfterDark" preserved for the existing skipLateRain shortcut — true when
+  // nothing meaningful fell during climbing hours but there's rain after cutoff.
+  const allAfterDark = sumDuring < 0.2 && sumAfter >= 0.2;
+  return { sum: sumDuring, peakProb: peakDuring, allAfterDark, sumBeforeClimb, sumAfter };
 }
 
 // True if the next day is climbable in the morning (no early rain, low daily rain total).
@@ -965,12 +987,20 @@ export function scoreDay(crag, day, prevDay, nextDay) {
   };
 
   // — Effective precipitation: only rain during climbable hours counts —
+  // Climbable hours = climbStartHour..climbCutoffHour. Pre-climb rain (e.g. a
+  // 2am–9am drizzle that's clear by climbing time) is already captured by the
+  // hourly dryness model, so it doesn't double-count here.
+  const startH = climbStartHour(crag);
   const cutoffH = climbCutoffHour(crag);
-  const climb = climbableRain(day, cutoffH);
-  // We can ignore late rain if it's all after the cutoff AND tomorrow morning is dry.
+  const climb = climbableRain(day, startH, cutoffH);
+  // Always use the climbable-hours sum/prob. The full-day precipSum was the old
+  // fallback when we lacked hourly windows, but the windows-based path is now
+  // robust enough to use unconditionally — morning-only rain shouldn't tank the
+  // score for an otherwise dry afternoon.
+  const effectiveSum = climb.sum;
+  const effectiveProb = climb.peakProb;
+  // Late-rain flag retained for the "rain after dark only" reason string.
   const skipLateRain = climb.allAfterDark && nextMorningDry(nextDay);
-  const effectiveSum = skipLateRain ? climb.sum : (day.precipSum || 0);
-  const effectiveProb = skipLateRain ? climb.peakProb : (day.precipProb || 0);
 
   // — Temperature scoring —
   const [idealMin, idealMax] = crag.idealTemp;
@@ -1121,9 +1151,22 @@ export function scoreDay(crag, day, prevDay, nextDay) {
   }
 
   // — Precipitation (climbable hours only) —
-  const rainDetail = skipLateRain
-    ? `${effectiveSum.toFixed(1)}mm during climbable hours (rain after dark ignored)`
-    : `${effectiveSum.toFixed(1)}mm forecast · ${Math.round(effectiveProb)}% peak chance`;
+  // Build a detail string that explains WHY the rain penalty is what it is.
+  // Pre-climb rain (e.g. a dawn shower) and post-cutoff rain are noted but
+  // don't add to the penalty — dryness handles any rock-wetness carry-over.
+  const preClimbMm = climb.sumBeforeClimb || 0;
+  const postClimbMm = climb.sumAfter || 0;
+  let rainDetail;
+  if (effectiveSum < 0.2 && (preClimbMm > 0.2 || postClimbMm > 0.2)) {
+    const parts = [];
+    if (preClimbMm > 0.2) parts.push(`${preClimbMm.toFixed(1)}mm before ${startH}am`);
+    if (postClimbMm > 0.2) parts.push(`${postClimbMm.toFixed(1)}mm after dark`);
+    rainDetail = `dry during climbing hours — ${parts.join(' + ')} outside the window`;
+  } else if (skipLateRain) {
+    rainDetail = `${effectiveSum.toFixed(1)}mm during climbable hours (rain after dark ignored)`;
+  } else {
+    rainDetail = `${effectiveSum.toFixed(1)}mm forecast · ${Math.round(effectiveProb)}% peak chance`;
+  }
   if (effectiveSum > 5) {
     score -= 60;
     reasons.push('rain expected');
@@ -1142,6 +1185,8 @@ export function scoreDay(crag, day, prevDay, nextDay) {
   }
   if (skipLateRain && climb.sumAfter > 0.5) {
     reasons.push('rain after dark only');
+  } else if (effectiveSum < 0.2 && preClimbMm > 0.5) {
+    reasons.push('dry by climbing time');
   }
 
   // — Rock dryness (hourly model) —
