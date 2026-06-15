@@ -8,6 +8,7 @@
 // shade: "morning", "afternoon", "all-day", "none" — when shade is available
 // rockType: granite, sandstone, quartzite — used for context
 // trip: "day" (<3h drive, day-trip from Melbourne) or "weekend" (3h+, overnight worth it)
+// heatCap: (optional) temperature in °C above which the crag becomes uncomfortable on clear days (e.g. N-aspect sun-baths)
 
 export const CRAGS = [
   // — Metro / day-trip —
@@ -21,13 +22,13 @@ export const CRAGS = [
     aspect: 'W',
     rockType: 'trachyte',
     dryRating: 4,
-    idealTemp: [8, 18],
+    idealTemp: [10, 24],
     shade: 'morning',
     driveTime: '1h',
     trip: 'day',
-    notes: 'High elevation keeps it cooler than the city. Trad-heavy on Omega Block — south- and west-facing sectors. Much of the crag is shaded by forest. Dries quickly after rain — a few hours of sun and wind.',
+    notes: 'Ideal in summer — 950m elevation keeps it noticeably cooler than the city on a hot day. Trad-heavy on Omega Block — south- and west-facing sectors. Much of the crag is shaded by forest. Dries quickly after rain — a few hours of sun and wind.',
     sunOnWall: 'Afternoon (Omega Block); forest-shaded otherwise',
-    bestIn: 'cool',
+    bestIn: 'mild',
   },
   {
     id: 'falcons-lookout',
@@ -39,11 +40,12 @@ export const CRAGS = [
     aspect: 'N',
     rockType: 'conglomerate',
     dryRating: 3,
-    idealTemp: [10, 20],
+    idealTemp: [8, 18],
+    heatCap: 22,
     shade: 'none',
     driveTime: '50min',
     trip: 'day',
-    notes: 'North-facing — catches sun most of the day. Best in cooler months; can be hot in summer. Conglomerate dries reasonably fast in sun and wind.',
+    notes: 'Ideal in winter — north-facing aspect makes it a sun bath in the cooler months. Anything over 22°C with clear skies is genuinely hot on the wall. Conglomerate dries reasonably fast in sun and wind.',
     sunOnWall: 'Most of the day (north-facing)',
     bestIn: 'cool',
   },
@@ -437,13 +439,13 @@ export const CRAGS = [
     aspect: 'E',
     rockType: 'quartzite',
     dryRating: 5,
-    idealTemp: [8, 22],
+    idealTemp: [10, 26],
     shade: 'afternoon',
     driveTime: '4h',
     trip: 'both',
-    notes: 'Right (north) side of Central Gully — direct walk-in from camp. Morning sun, shades up by midday. Dunes Buttress is notably shady. Some classics in the moderate grades.',
+    notes: 'Right (north) side of Central Gully — direct walk-in from camp. Morning sun, shades up by midday — a solid hot-weather option at Arapiles. Dunes Buttress is notably shady. Some classics in the moderate grades.',
     sunOnWall: 'Morning only (some sub-areas notably shady)',
-    bestIn: 'cool',
+    bestIn: 'warm',
   },
   {
     id: 'arap-organpipes',
@@ -498,7 +500,7 @@ export const CRAGS = [
     shade: 'all-day',
     driveTime: '4h',
     trip: 'both',
-    notes: 'Slander Wall, Skydiver Wall and friends — quieter gully north of the main cliff. Main walls face south and stay shaded — a hot-day option. Mix of moderate trad and harder lines.',
+    notes: 'Slander Wall, Skydiver Wall and friends — quieter gully north of the main cliff. Main walls face south and stay shaded — one of the best hot-weather options at Arapiles. Mix of moderate trad and harder lines.',
     sunOnWall: 'Shaded most of the day',
     bestIn: 'warm',
   },

@@ -1,7 +1,7 @@
 // Open-Meteo forecast fetching + scoring
 // API: https://open-meteo.com/en/docs — free, no key, CORS-enabled
 
-import { CRAGS } from './crags.js?v=22';
+import { CRAGS } from './crags.js?v=23';
 
 const API = 'https://api.open-meteo.com/v1/forecast';
 
@@ -1070,6 +1070,22 @@ export function scoreDay(crag, day, prevDay, nextDay) {
       const pen = 3;
       score -= pen;
       add('aspect', 'Shade × cool', -pen, `wall in shade most of the day — stays cool`);
+    }
+  }
+
+  // — Per-crag heat cap (e.g. sun-bath aspects with no shade) —
+  // Crags can set `heatCap: 22` to flag that they become genuinely hot above
+  // that threshold on clear days. Falcon's Lookout is the canonical case: N-aspect,
+  // no shade, conglomerate that gets uncomfortable over 22°C with clear sky.
+  if (typeof crag.heatCap === 'number' && t > crag.heatCap) {
+    // sunHours is daily clear-sky proxy in hours (sunshine_duration / 3600).
+    // Use it to gauge whether it's a clear day. >6h of sun in winter days = clear.
+    if (sunHours >= 5) {
+      const over = t - crag.heatCap;
+      const pen = Math.min(12, Math.round(4 + over * 1.5));
+      score -= pen;
+      reasons.push('sun-baked aspect');
+      add('aspect', 'Sun-trap × clear hot day', -pen, `${t.toFixed(0)}°C with ${sunHours.toFixed(1)}h of clear sun — this wall bakes above ${crag.heatCap}°C`);
     }
   }
 
