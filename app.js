@@ -444,7 +444,7 @@ function renderDestinationCard(dest, isTop) {
           <h3>${escapeHtml(destination)}</h3>
           <div class="area">${drive} from Melbourne · ${namedSubCrags.length} crag${namedSubCrags.length === 1 ? '' : 's'}</div>
           <div class="day-score-note">Today's best: <strong>${escapeHtml(bestForToday.crag.name)}</strong> · ${bestForToday.score}/100</div>
-          ${renderDrynessLine(bestForToday.nowDryness, bestForToday.lastRain)}
+          ${renderDrynessLine(bestForToday.nowDryness, bestForToday.lastRain, daysAheadOfActive())}
           <div class="reasons">${reasonsHtml}</div>
         </div>
         <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -599,7 +599,7 @@ function renderCard(row, isTop, isWeekend) {
           ${showArea ? `<div class="area">${escapeHtml(crag.area)} · ${crag.driveTime} from Melbourne</div>` : `<div class="area">${crag.driveTime} from Melbourne</div>`}
           ${isWeekend && tripScore != null ? `<div class="day-score-note">Today scores <strong>${score}</strong> on its own</div>` : ''}
           ${bestSubCragName ? `<div class="day-score-note">Best: <strong>${escapeHtml(bestSubCragName)}</strong></div>` : ''}
-          ${renderDrynessLine(nowDryness, lastRain)}
+          ${renderDrynessLine(nowDryness, lastRain, daysAheadOfActive())}
           <div class="reasons">${reasonsHtml}</div>
         </div>
         <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -829,10 +829,32 @@ function compassFromDeg(deg) {
   return dirs[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
 }
 
-function renderDrynessLine(nowDryness, lastRain) {
+// How many days ahead of today is the currently-active tab? Returns 0 for
+// today, 1 for tomorrow, etc. Used to gate point-in-time UI like the rock
+// dryness pill so it doesn't show stale snapshots on far-future dates.
+function daysAheadOfActive() {
+  if (!state.dates || !state.activeDate) return 0;
+  const idx = state.dates.indexOf(state.activeDate);
+  return idx < 0 ? 0 : idx;
+}
+
+// Render the rock-condition pill.
+//
+// `nowDryness` and `lastRain` are point-in-time snapshots (right now), so they
+// only make sense on the today tab and — with a label change — on tomorrow.
+// For dates more than a day out we suppress the pill entirely rather than
+// mislead the user with a current-moment reading dressed up as a future one.
+//
+// `daysAhead` — 0 = today (or unknown), 1 = tomorrow, ≥2 = hide.
+function renderDrynessLine(nowDryness, lastRain, daysAhead = 0) {
   if (nowDryness == null) return '';
+  if (daysAhead >= 2) return '';
   const band = drynessBand(nowDryness);
+  const isTomorrow = daysAhead === 1;
   let rainText = '';
+  // On the tomorrow tab the "last rain Xh ago" reads as right-now, so we
+  // either rephrase it (still relative to now, just made explicit) or drop it
+  // if the rain was so recent it's already accounted for in the day forecast.
   if (lastRain && lastRain.hoursAgo != null && lastRain.hoursAgo < 72 && lastRain.totalMm >= 0.3) {
     const h = lastRain.hoursAgo;
     const ago = h < 1 ? 'now' : h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
@@ -841,8 +863,8 @@ function renderDrynessLine(nowDryness, lastRain) {
   }
   return `
     <div class="dryness-line">
-      <span class="dryness-pill ${band.color}" title="Rock dryness ${nowDryness}/100">
-        <span class="dryness-dot"></span>${escapeHtml(band.label)} · ${nowDryness}
+      <span class="dryness-pill ${band.color}" title="${isTomorrow ? 'Rock dryness right now (carries into tomorrow)' : 'Rock dryness right now'} — ${nowDryness}/100">
+        <span class="dryness-dot"></span>${isTomorrow ? 'Going into tomorrow' : 'Rock now'}: ${escapeHtml(band.label)} · ${nowDryness}
       </span>
       ${rainText}
     </div>
