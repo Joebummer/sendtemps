@@ -106,6 +106,10 @@ export async function fetchAllForecasts() {
         // weight the temp penalty by what fraction of the day is actually in
         // the comfort band, not just whether the peak hour clips inside it.
         climbTemps: computeClimbTemps(crag, f.hourly, date),
+        // Humidity distribution across the climbing window. Lets scoreDay
+        // apply a per-crag-tuned penalty when the rock spends real hours in
+        // greasy/damp territory — weighted by rockType-driven dryRating.
+        climbHumidity: computeClimbHumidity(crag, f.hourly, date),
         sunshine: f.daily.sunshine_duration[di], // seconds
         weatherCode: f.daily.weathercode[di],
         rainWindows: extractRainWindows(f.hourly, date),
@@ -232,6 +236,52 @@ function computeClimbTemps(crag, hourly, dateStr) {
     meanTemp: tempSum / count,
     meanApparent: appSum / count,
     maxApparent: maxApp,
+  };
+}
+
+// Compute the humidity distribution across the climbing window for a crag.
+// Returns `{ climbHours, hoursHumid, hoursModerate, hoursDry, meanRh, maxRh }`.
+//
+// Buckets per hour by relative humidity:
+//   <60%  → dry      (crisp rock, friction good)
+//   60–75% → moderate (climbable but rock starts to feel cooler/greasy)
+//   >75%  → humid    (rock feels damp, sandstone/conglomerate gets slimy)
+//
+// scoreDay uses this with the per-crag dryRating (1–5) to compute a sensitivity
+// multiplier: porous fast-drying rock (granite at 5) shrugs off humidity, while
+// slow-drying rock (conglomerate at 1–2) takes a real hit when RH stays high.
+function computeClimbHumidity(crag, hourly, dateStr) {
+  const empty = {
+    climbHours: 0, hoursHumid: 0, hoursModerate: 0, hoursDry: 0,
+    meanRh: null, maxRh: null,
+  };
+  if (!hourly || !hourly.time) return empty;
+  const startH = (crag.trip === 'weekend' || crag.trip === 'both') ? 8 : 9;
+  const cutoffH = (crag.trip === 'weekend' || crag.trip === 'both') ? 20 : 18;
+  let humid = 0, moderate = 0, dry = 0, count = 0;
+  let rhSum = 0, maxRh = -Infinity;
+  for (let i = 0; i < hourly.time.length; i++) {
+    const t = hourly.time[i];
+    if (!t.startsWith(dateStr)) continue;
+    const hour = parseInt(t.slice(11, 13), 10);
+    if (hour < startH || hour >= cutoffH) continue;
+    const rh = hourly.relative_humidity_2m?.[i];
+    if (rh == null) continue;
+    count++;
+    rhSum += rh;
+    if (rh > maxRh) maxRh = rh;
+    if (rh > 75) humid++;
+    else if (rh >= 60) moderate++;
+    else dry++;
+  }
+  if (count === 0) return empty;
+  return {
+    climbHours: count,
+    hoursHumid: humid,
+    hoursModerate: moderate,
+    hoursDry: dry,
+    meanRh: rhSum / count,
+    maxRh,
   };
 }
 
@@ -1143,6 +1193,58 @@ export function scoreDay(crag, day, prevDay, nextDay) {
       ? `${Math.round(t)}°C avg during climbing hours — ${ct.hoursInRange}/${climbHours}h inside ideal (${idealMin}–${idealMax}°C)`
       : `${Math.round(t)}°C — inside ideal range (${idealMin}–${idealMax}°C)`;
     add('temp', 'Temperature', 0, detail);
+  }
+
+  // — Humidity scoring (per-crag dwell-time model) —
+  //
+  // Mirrors the temperature dwell-time approach: we look at how many hours
+  // of the climbing window sit in greasy/damp territory rather than just the
+  // daily mean RH. The penalty is then scaled by a per-crag sensitivity that
+  // falls out of dryRating (1–5):
+  //   dryRating 5 → sensitivity 0.25  (granite at the You Yangs/Buffalo)
+  //   dryRating 4 → sensitivity 0.50  (Camel's Hump trachyte, Cathedral Range)
+  //   dryRating 3 → sensitivity 0.75  (Falcon's conglomerate)
+  //   dryRating 2 → sensitivity 1.00  (slow-drying sandstone, if any)
+  //   dryRating 1 → sensitivity 1.25  (very slow — currently none)
+  //
+  // Humid hours weight full; moderate hours weight 0.4. The penalty caps at
+  // -15 so humidity can't dominate a score the way rain does, but a fully
+  // humid summer day on conglomerate will read closer to "-10 humid" rather
+  // than being invisible like before.
+  const hum = day.climbHumidity || {};
+  const humClimbHours = hum.climbHours || 0;
+  if (humClimbHours >= 4) {
+    const dryRating = crag.dryRating ?? 3;
+    const humSensitivity = Math.max(0.25, (6 - dryRating) / 4); // 5→0.25, 1→1.25
+    const muggyHours = (hum.hoursHumid || 0) + 0.4 * (hum.hoursModerate || 0);
+    let humPen = Math.min(15, Math.round(muggyHours * 1.2 * humSensitivity));
+    // Compound interactions with temperature — a warm humid day is muggy,
+    // a cold humid day means damp rock that won't dry in your session.
+    let compoundPen = 0;
+    let compoundLabel = null;
+    if (climbHours > 0 && t >= 22 && muggyHours >= 3) {
+      compoundPen = 4;
+      compoundLabel = `muggy — ${Math.round(hum.meanRh)}% RH at ${Math.round(t)}°C`;
+    } else if (climbHours > 0 && t <= 8 && muggyHours >= 3) {
+      compoundPen = 3;
+      compoundLabel = `damp cold — ${Math.round(hum.meanRh)}% RH at ${Math.round(t)}°C`;
+    }
+    const totalHumPen = humPen + compoundPen;
+    if (totalHumPen >= 3) {
+      score -= totalHumPen;
+      const humHoursLabel = (hum.hoursHumid || 0) >= 1
+        ? `${hum.hoursHumid}h above 75% RH`
+        : `${Math.round(muggyHours)}h of muggy hours`;
+      const detail = compoundLabel
+        ? `${humHoursLabel} — ${compoundLabel} (rock sensitivity ×${humSensitivity.toFixed(2)})`
+        : `${humHoursLabel}, mean ${Math.round(hum.meanRh)}% RH (rock sensitivity ×${humSensitivity.toFixed(2)})`;
+      if (totalHumPen >= 8) reasons.push(compoundPen > 0 && t >= 22 ? 'muggy' : 'humid');
+      add('humidity', 'Humidity', -totalHumPen, detail);
+    } else if ((hum.hoursDry || 0) >= 6 && muggyHours === 0) {
+      // Crisp-air bonus only when the whole climbing day stays below 60% RH.
+      score += 2;
+      add('humidity', 'Humidity', +2, `crisp air — ${hum.hoursDry}h below 60% RH, mean ${Math.round(hum.meanRh)}%`);
+    }
   }
 
   // — Sun-on-wall × temperature interaction (true solar geometry) —

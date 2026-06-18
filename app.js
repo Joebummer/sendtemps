@@ -9,7 +9,7 @@ import {
   weatherIcon,
   scoreBand,
   drynessBand,
-} from './forecast.js?v=44';
+} from './forecast.js?v=45';
 
 // ---- Theme toggle ----
 (function () {
@@ -919,6 +919,10 @@ const CATEGORY_METHODOLOGY = {
     label: 'Rock dryness',
     blurb: 'Rolling estimate of how dry the rock surface is, based on the last 4 days of rain and an exponential decay tuned per rock type — granite dries in ~6h, sandstone takes ~24h. Damp rock loses points; bone-dry adds a small bonus.',
   },
+  humidity: {
+    label: 'Humidity',
+    blurb: 'Counts the hours during climbing time that sit above 75% RH (humid) or between 60–75% RH (moderate). Scaled by a per-crag rock-sensitivity multiplier derived from dryRating — porous granite shrugs off humidity, conglomerate and slow-drying sandstone bite harder. Warm humid days add a small "muggy" penalty; cold humid days add a "damp cold" penalty. A full crisp-air day earns +2.',
+  },
   wind: {
     label: 'Wind',
     blurb: 'Penalty for high wind, scaled by exposure: an onshore wall takes the full hit, a lee wall is barely affected. Uses the higher of mean wind and 70% of gusts so a gusty 25 km/h day doesn\'t look calm.',
@@ -942,6 +946,7 @@ function renderScoreBreakdown(contributions, finalScore) {
     bestIn: '🎯',
     precip: '🌧️',
     dryness: '🪨',
+    humidity: '💧',
     wind: '💨',
     sun: '☀️',
     closure: '🚫',
