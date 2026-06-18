@@ -9,7 +9,7 @@ import {
   weatherIcon,
   scoreBand,
   drynessBand,
-} from './forecast.js?v=51';
+} from './forecast.js?v=52';
 
 // ---- Theme toggle ----
 (function () {
@@ -1055,9 +1055,16 @@ function renderHourlyStrip(fc, mode = 'tomorrow') {
   if (bw && bw.count >= 2) {
     const avg = Math.round(bw.avg);
     const runAvg = Math.round(bw.runAvg ?? bw.avg);
+    // "Good all day" requires: long run, covers 9am–6pm, AND no hour in
+    // the run has precipProb > 40% (a day with likely afternoon rain is not
+    // 'good all day' even if hourly scores technically qualify).
+    const runHoursWithRain = bw && (bw.runHours ?? 0) > 5
+      ? hours.filter(h => h.hour >= (bw.runStart ?? 0) && h.hour < (bw.runEnd ?? 24) && h.precipProb > 40)
+      : [];
     const goodAllDay = (bw.runHours ?? 0) > 5
       && (bw.runStart ?? 99) <= 9
-      && (bw.runEnd ?? 0) >= 18;
+      && (bw.runEnd ?? 0) >= 18
+      && runHoursWithRain.length === 0;
 
     // --- Rec 1: directive language ---
     // Find the first hour after the window that has meaningful rain coming

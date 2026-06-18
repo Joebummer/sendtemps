@@ -667,8 +667,13 @@ function buildDayHourly(crag, hourly, drynessSeries, dateStr, fromHour = 6, toHo
     });
   }
   // Now score each hour and find the best window.
-  for (const h of out) {
-    h.score = scoreHour(crag, h);
+  // Pass each hour its rain context: count of hours within ±2h window that
+  // also have precipProb > 30%. Sustained rain across the window should
+  // penalise each hour more than a single isolated rainy hour.
+  for (let i = 0; i < out.length; i++) {
+    const nearby = out.slice(Math.max(0, i - 2), Math.min(out.length, i + 3));
+    const rainNeighbours = nearby.filter(n => n !== out[i] && n.precipProb > 30).length;
+    out[i].score = scoreHour(crag, out[i], rainNeighbours);
   }
   return out;
 }
@@ -697,13 +702,23 @@ function melbourneHourNow() {
 // Score a single hour 0–100 for climbing quality at this crag.
 // Combines: rain (heavy penalty), temperature vs ideal, dryness, wind,
 // and aspect-vs-sun bonuses or penalties depending on temperature.
-function scoreHour(crag, h) {
+// rainNeighbours: count of hours within ±2h that also have precipProb > 30%.
+// Used to scale up the probability penalty for sustained rain windows vs
+// isolated single-hour showers.
+function scoreHour(crag, h, rainNeighbours = 0) {
   let s = 100;
-  // Rain
+  // Rain — actual measured precip takes priority.
+  // For probability-only rain, scale the penalty by how many surrounding
+  // hours also have elevated probability (sustained = worse than a shower).
   if (h.precip > 1) s -= 70;
   else if (h.precip > 0.2) s -= 35;
-  else if (h.precipProb > 60) s -= 20;
-  else if (h.precipProb > 30) s -= 8;
+  else if (h.precipProb > 60) {
+    // Base -20, +3 per sustained neighbour, capped at -32
+    s -= Math.min(32, 20 + rainNeighbours * 3);
+  } else if (h.precipProb > 30) {
+    // Base -8, +2 per sustained neighbour, capped at -16
+    s -= Math.min(16, 8 + rainNeighbours * 2);
+  }
 
   // Temperature vs ideal
   const [idealMin, idealMax] = crag.idealTemp;
