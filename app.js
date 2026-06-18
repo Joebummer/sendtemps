@@ -642,8 +642,8 @@ function renderDestinationCard(dest, isTop) {
         ${(() => {
           const fcDest = state.forecasts?.[bestForToday.crag.id];
           if (!fcDest) return '';
-          if (fcDest.todayDate && state.activeDate === fcDest.todayDate) return renderHourlyStrip(fcDest, 'today');
-          if (fcDest.tomorrowDate && state.activeDate === fcDest.tomorrowDate) return renderHourlyStrip(fcDest, 'tomorrow');
+          if (fcDest.todayDate && state.activeDate === fcDest.todayDate) return renderHourlyStrip(fcDest, 'today', bestForToday.score);
+          if (fcDest.tomorrowDate && state.activeDate === fcDest.tomorrowDate) return renderHourlyStrip(fcDest, 'tomorrow', bestForToday.score);
           return '';
         })()}
         ${renderPicksByDay(state.tripDates, bestPerDay)}
@@ -777,8 +777,8 @@ function renderCard(row, isTop, isWeekend) {
   const fc = state.forecasts?.[crag.id];
   const isTomorrow = !!(fc && fc.tomorrowDate && state.activeDate === fc.tomorrowDate);
   const isToday    = !!(fc && fc.todayDate    && state.activeDate === fc.todayDate);
-  const tomorrowStrip = isTomorrow ? renderHourlyStrip(fc, 'tomorrow') : '';
-  const todayStrip    = isToday    ? renderHourlyStrip(fc, 'today')    : '';
+  const tomorrowStrip = isTomorrow ? renderHourlyStrip(fc, 'tomorrow', headlineScore) : '';
+  const todayStrip    = isToday    ? renderHourlyStrip(fc, 'today', headlineScore)    : '';
 
   return `
     <article class="crag-card ${isTop ? 'top' : ''}" data-open="false" data-id="${crag.id}">
@@ -1037,7 +1037,7 @@ function renderConditionBand(fc, mode) {
 // + bars + exposure tint, dryness, and the per-hour score (0–100). For the
 // today strip the cell matching the current Melbourne hour gets an `is-now`
 // highlight; for the 9am–6pm "good all day" case the whole run is outlined.
-function renderHourlyStrip(fc, mode = 'tomorrow') {
+function renderHourlyStrip(fc, mode = 'tomorrow', dayScore = null) {
   const hours = mode === 'today' ? fc?.todayHourly : fc?.tomorrowHourly;
   const bw = mode === 'today' ? fc?.todayBestWindow : fc?.tomorrowBestWindow;
   if (!fc || !Array.isArray(hours) || hours.length === 0) return '';
@@ -1055,16 +1055,18 @@ function renderHourlyStrip(fc, mode = 'tomorrow') {
   if (bw && bw.count >= 2) {
     const avg = Math.round(bw.avg);
     const runAvg = Math.round(bw.runAvg ?? bw.avg);
-    // "Good all day" requires: long run, covers 9am–6pm, AND no hour in
-    // the run has precipProb > 40% (a day with likely afternoon rain is not
-    // 'good all day' even if hourly scores technically qualify).
+    // "Good all day" requires: long run spanning 9am–6pm, no hour in the
+    // run with precipProb > 35%, AND the day score (from scoreDay which has
+    // fuller context) must be ≥ 75. Staughton Vale at 74/day with 40% rain
+    // is not 'good all day' even if the hourly run qualifies numerically.
     const runHoursWithRain = bw && (bw.runHours ?? 0) > 5
-      ? hours.filter(h => h.hour >= (bw.runStart ?? 0) && h.hour < (bw.runEnd ?? 24) && h.precipProb > 40)
+      ? hours.filter(h => h.hour >= (bw.runStart ?? 0) && h.hour < (bw.runEnd ?? 24) && h.precipProb > 35)
       : [];
     const goodAllDay = (bw.runHours ?? 0) > 5
       && (bw.runStart ?? 99) <= 9
       && (bw.runEnd ?? 0) >= 18
-      && runHoursWithRain.length === 0;
+      && runHoursWithRain.length === 0
+      && (dayScore == null || dayScore >= 75);
 
     // --- Rec 1: directive language ---
     // Find the first hour after the window that has meaningful rain coming
