@@ -647,8 +647,14 @@ html[data-theme="dark"] .reason-tag-closed {
 
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
   gap: var(--space-2);
+}
+.metric-sub {
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.8;
+  font-weight: 500;
 }
 .metric {
   background: var(--color-surface);
@@ -982,6 +988,7 @@ html[data-theme="dark"] .reason-tag-closed {
   .crag-header { padding: var(--space-3); }
   .score-pill { width: 48px; height: 48px; font-size: var(--text-base); }
   .metric-grid { grid-template-columns: repeat(2, 1fr); }
+  .metric-grid .metric:nth-child(5):last-child { grid-column: 1 / -1; }
 }
 
 /* ---- Hide button + hidden-list disclosure ---- */

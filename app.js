@@ -9,7 +9,7 @@ import {
   weatherIcon,
   scoreBand,
   drynessBand,
-} from './forecast.js?v=49';
+} from './forecast.js?v=50';
 
 // ---- Theme toggle ----
 (function () {
@@ -809,6 +809,7 @@ function renderCard(row, isTop, isWeekend) {
           <div class="metric"><div class="v">${Math.round(day.tMin)}°</div><div class="l">Low</div></div>
           <div class="metric"><div class="v">${Math.round(day.precipProb || 0)}%</div><div class="l">Rain</div></div>
           <div class="metric"><div class="v">${Math.round(day.wind)}</div><div class="l">Wind km/h</div></div>
+          ${renderHumidityTile(day)}
         </div>
         <div class="detail-section">
           <div class="section-label">Forecast</div>
@@ -918,10 +919,6 @@ const CATEGORY_METHODOLOGY = {
   dryness: {
     label: 'Rock dryness',
     blurb: 'Rolling estimate of how dry the rock surface is, based on the last 4 days of rain and an exponential decay tuned per rock type — granite dries in ~6h, sandstone takes ~24h. Damp rock loses points; bone-dry adds a small bonus.',
-  },
-  humidity: {
-    label: 'Humidity',
-    blurb: 'Counts the hours during climbing time that sit above 75% RH (humid) or between 60–75% RH (moderate). Scaled by a per-crag rock-sensitivity multiplier derived from dryRating — porous granite shrugs off humidity, conglomerate and slow-drying sandstone bite harder. Warm humid days add a small "muggy" penalty; cold humid days add a "damp cold" penalty. A full crisp-air day earns +2.',
   },
   wind: {
     label: 'Wind',
@@ -1223,6 +1220,23 @@ function renderDrynessLine(nowDryness, lastRain, daysAhead = 0) {
       ${rainText}
     </div>
   `;
+}
+
+function renderHumidityTile(day) {
+  const hum = day.climbHumidity;
+  if (!hum || !(hum.climbHours >= 1) || hum.meanRh == null) return '';
+  const mean = Math.round(hum.meanRh);
+  // Sub-label prefers the most informative signal:
+  //   - many humid hours → "Xh muggy"
+  //   - many dry hours → "crisp"
+  //   - otherwise show the climb-hours range as context
+  let sub;
+  if ((hum.hoursHumid || 0) >= 3) sub = `${hum.hoursHumid}h muggy`;
+  else if ((hum.hoursHumid || 0) >= 1) sub = `${hum.hoursHumid}h muggy`;
+  else if ((hum.hoursDry || 0) >= 6) sub = 'crisp';
+  else if ((hum.hoursModerate || 0) >= 3) sub = `${hum.hoursModerate}h moderate`;
+  else sub = `peak ${Math.round(hum.maxRh)}%`;
+  return `<div class="metric" title="Mean relative humidity during climbing hours"><div class="v">${mean}%</div><div class="l">Humidity <span class="metric-sub">· ${sub}</span></div></div>`;
 }
 
 function renderRainTiming(day) {

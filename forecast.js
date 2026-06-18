@@ -722,24 +722,8 @@ function scoreHour(crag, h) {
   if (h.wind > 50) s -= 15;
   else if (h.wind > 35) s -= 5;
 
-  // Humidity — mirror of the daily dwell model, applied per-hour so the hourly
-  // strip stays consistent with the day-card chips. Scaled by per-crag rock
-  // sensitivity (porous granite at dryRating 5 shrugs off humidity; soft rock
-  // at dryRating 1 is much more sensitive).
-  if (h.humidity != null) {
-    const humSens = Math.max(0.25, (6 - (crag.dryRating ?? 3)) / 4);
-    if (h.humidity >= 75) {
-      s -= Math.round(10 * humSens);         // muggy hour
-      if (h.temp >= 22) s -= 3;              // warm + sticky → poor friction
-      else if (h.temp <= 12) s -= 3;         // damp/cool → greasy, won't dry
-    } else if (h.humidity >= 60) {
-      s -= Math.round(5 * humSens);          // borderline moderate — still drags friction
-      if (h.temp >= 22) s -= 2;              // warm + moderate humidity
-      else if (h.temp <= 12) s -= 2;         // cool + moderate humidity (very common Melbourne)
-    } else if (h.humidity < 50 && h.temp >= 10 && h.temp <= 22) {
-      s += 1;                                // crisp friction bonus
-    }
-  }
+  // Humidity does not affect the hourly score (v59.14). It is surfaced as a
+  // stat tile + chip on the day card instead — see scoreDay and the UI.
 
   // Sun-on-wall interactions. h.sunOnWall is null for mixed-aspect parents —
   // skip these tweaks rather than guess (children carry the real aspect).
@@ -1214,55 +1198,27 @@ export function scoreDay(crag, day, prevDay, nextDay) {
     add('temp', 'Temperature', 0, detail);
   }
 
-  // — Humidity scoring (per-crag dwell-time model) —
+  // — Humidity is shown as a stat + chip only (v59.14) —
   //
-  // Mirrors the temperature dwell-time approach: we look at how many hours
-  // of the climbing window sit in greasy/damp territory rather than just the
-  // daily mean RH. The penalty is then scaled by a per-crag sensitivity that
-  // falls out of dryRating (1–5):
-  //   dryRating 5 → sensitivity 0.25  (granite at the You Yangs/Buffalo)
-  //   dryRating 4 → sensitivity 0.50  (Camel's Hump trachyte, Cathedral Range)
-  //   dryRating 3 → sensitivity 0.75  (Falcon's conglomerate)
-  //   dryRating 2 → sensitivity 1.00  (slow-drying sandstone, if any)
-  //   dryRating 1 → sensitivity 1.25  (very slow — currently none)
-  //
-  // Humid hours weight full; moderate hours weight 0.4. The penalty caps at
-  // -15 so humidity can't dominate a score the way rain does, but a fully
-  // humid summer day on conglomerate will read closer to "-10 humid" rather
-  // than being invisible like before.
-  const hum = day.climbHumidity || {};
-  const humClimbHours = hum.climbHours || 0;
-  if (humClimbHours >= 4) {
-    const dryRating = crag.dryRating ?? 3;
-    const humSensitivity = Math.max(0.25, (6 - dryRating) / 4); // 5→0.25, 1→1.25
-    const muggyHours = (hum.hoursHumid || 0) + 0.4 * (hum.hoursModerate || 0);
-    let humPen = Math.min(15, Math.round(muggyHours * 1.2 * humSensitivity));
-    // Compound interactions with temperature — a warm humid day is muggy,
-    // a cold humid day means damp rock that won't dry in your session.
-    let compoundPen = 0;
-    let compoundLabel = null;
-    if (climbHours > 0 && t >= 22 && muggyHours >= 3) {
-      compoundPen = 4;
-      compoundLabel = `muggy — ${Math.round(hum.meanRh)}% RH at ${Math.round(t)}°C`;
-    } else if (climbHours > 0 && t <= 12 && muggyHours >= 3) {
-      compoundPen = 4;
-      compoundLabel = `damp cool — ${Math.round(hum.meanRh)}% RH at ${Math.round(t)}°C`;
-    }
-    const totalHumPen = humPen + compoundPen;
-    if (totalHumPen >= 3) {
-      score -= totalHumPen;
-      const humHoursLabel = (hum.hoursHumid || 0) >= 1
-        ? `${hum.hoursHumid}h above 75% RH`
-        : `${Math.round(muggyHours)}h of muggy hours`;
-      const detail = compoundLabel
-        ? `${humHoursLabel} — ${compoundLabel}`
-        : `${humHoursLabel}, mean ${Math.round(hum.meanRh)}% RH`;
-      if (totalHumPen >= 8) reasons.push(compoundPen > 0 && t >= 22 ? 'muggy' : 'humid');
-      add('humidity', 'Humidity', -totalHumPen, detail);
-    } else if ((hum.hoursDry || 0) >= 6 && muggyHours === 0) {
-      // Crisp-air bonus only when the whole climbing day stays below 60% RH.
-      score += 2;
-      add('humidity', 'Humidity', +2, `crisp air — ${hum.hoursDry}h below 60% RH, mean ${Math.round(hum.meanRh)}%`);
+  // We do NOT factor humidity into the score itself. The hourly experience of
+  // muggy or crisp conditions varies too much by aspect, shelter, and personal
+  // preference for a universal penalty to be honest. Instead, the day card
+  // surfaces the mean RH and muggy/dry hour counts as their own stat tile,
+  // and we push a contextual chip ("muggy", "humid", "crisp") so the vibe
+  // still reads at a glance. climbHumidity is still computed upstream and
+  // exposed on day.climbHumidity for the UI to render.
+  {
+    const hum = day.climbHumidity || {};
+    const humClimbHours = hum.climbHours || 0;
+    if (humClimbHours >= 4) {
+      const muggyHours = (hum.hoursHumid || 0) + 0.4 * (hum.hoursModerate || 0);
+      if (climbHours > 0 && t >= 22 && muggyHours >= 3) {
+        reasons.push('muggy');
+      } else if ((hum.hoursHumid || 0) >= 3 || muggyHours >= 5) {
+        reasons.push('humid');
+      } else if ((hum.hoursDry || 0) >= 6 && muggyHours === 0) {
+        reasons.push('crisp air');
+      }
     }
   }
 
