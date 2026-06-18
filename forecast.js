@@ -1236,8 +1236,8 @@ export function scoreDay(crag, day, prevDay, nextDay) {
         ? `${hum.hoursHumid}h above 75% RH`
         : `${Math.round(muggyHours)}h of muggy hours`;
       const detail = compoundLabel
-        ? `${humHoursLabel} — ${compoundLabel} (rock sensitivity ×${humSensitivity.toFixed(2)})`
-        : `${humHoursLabel}, mean ${Math.round(hum.meanRh)}% RH (rock sensitivity ×${humSensitivity.toFixed(2)})`;
+        ? `${humHoursLabel} — ${compoundLabel}`
+        : `${humHoursLabel}, mean ${Math.round(hum.meanRh)}% RH`;
       if (totalHumPen >= 8) reasons.push(compoundPen > 0 && t >= 22 ? 'muggy' : 'humid');
       add('humidity', 'Humidity', -totalHumPen, detail);
     } else if ((hum.hoursDry || 0) >= 6 && muggyHours === 0) {
