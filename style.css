@@ -427,6 +427,28 @@ main {
   flex-wrap: wrap;
   gap: var(--space-1);
 }
+
+/* ---- Rec 3: Condition band ---- */
+/* Thin colour strip showing hourly score shape across the climbable window.
+   Green = good, amber = marginal, red = poor. Shows day shape at a glance
+   without needing to expand the card. */
+.condition-band {
+  display: flex;
+  gap: 2px;
+  margin-top: var(--space-2);
+  height: 8px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.cond-seg {
+  flex: 1;
+  border-radius: 2px;
+  min-width: 0;
+}
+.cond-seg.band-success { background: var(--color-success); }
+.cond-seg.band-primary { background: var(--color-primary); }
+.cond-seg.band-warning { background: var(--color-warning); opacity: 0.8; }
+.cond-seg.band-error   { background: var(--color-error);   opacity: 0.6; }
 .reason-tag {
   font-size: var(--text-xs);
   padding: 2px var(--space-2);
@@ -510,6 +532,7 @@ html[data-theme="dark"] .reason-tag-closed {
   user-select: none;
 }
 .score-breakdown > summary::-webkit-details-marker { display: none; }
+.score-breakdown > summary::marker { content: ''; }
 .score-breakdown > summary .section-label {
   margin: 0;
   font-weight: 600;
@@ -1103,19 +1126,22 @@ html[data-theme="dark"] .reason-tag-closed {
 /* ---- Tomorrow hourly strip + best-window callout ---- */
 .best-window-callout {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 2px;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   margin-bottom: var(--space-2);
   background: var(--color-surface-offset);
   border: 1px solid var(--color-border);
-  font-size: var(--text-sm);
 }
 .best-window-callout.success {
   background: var(--color-success-soft);
   border-color: var(--color-success);
+  color: var(--color-text);
+}
+.best-window-callout.primary {
+  background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  border-color: var(--color-primary);
   color: var(--color-text);
 }
 .best-window-callout.warning {
@@ -1131,6 +1157,22 @@ html[data-theme="dark"] .reason-tag-closed {
 .best-window-callout.muted {
   color: var(--color-text-muted);
 }
+.best-window-callout.is-past {
+  opacity: 0.6;
+}
+/* Rec 2: directive is the primary element, sub is secondary context */
+.best-window-directive {
+  font-size: var(--text-base);
+  font-weight: 700;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+.best-window-sub {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+/* Legacy selectors kept for safety */
 .best-window-label { font-weight: 600; }
 .best-window-time {
   font-variant-numeric: tabular-nums;
@@ -1225,6 +1267,7 @@ html[data-theme="dark"] .reason-tag-closed {
   margin-top: 2px;
 }
 .hour-score.success { background: var(--color-success); }
+.hour-score.primary { background: var(--color-primary); }
 .hour-score.warning { background: var(--color-warning); }
 .hour-score.error   { background: var(--color-error); }
 

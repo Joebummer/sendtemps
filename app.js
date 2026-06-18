@@ -9,7 +9,7 @@ import {
   weatherIcon,
   scoreBand,
   drynessBand,
-} from './forecast.js?v=50';
+} from './forecast.js?v=51';
 
 // ---- Theme toggle ----
 (function () {
@@ -788,7 +788,7 @@ function renderCard(row, isTop, isWeekend) {
       <button class="crag-header" aria-expanded="false" aria-controls="detail-${crag.id}">
         <div class="score-pill ${band.color}" aria-label="Score ${headlineScore} out of 100">
           ${headlineScore}
-          ${isWeekend && tripScore != null ? `<span class="score-pill-sub">trip</span>` : ''}
+          ${isWeekend && tripScore != null ? `<span class="score-pill-sub">trip</span>` : '<span class="score-pill-sub">day</span>'}
         </div>
         <div class="crag-info">
           <h3>${escapeHtml(crag.name)}</h3>
@@ -797,6 +797,7 @@ function renderCard(row, isTop, isWeekend) {
           ${bestSubCragName ? `<div class="day-score-note">Best: <strong>${escapeHtml(bestSubCragName)}</strong></div>` : ''}
           ${renderDrynessLine(nowDryness, lastRain, daysAheadOfActive())}
           <div class="reasons">${reasonsHtml}</div>
+          ${fc ? renderConditionBand(fc, isToday ? 'today' : isTomorrow ? 'tomorrow' : null) : ''}
         </div>
         <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M6 9l6 6 6-6"/>
@@ -1009,6 +1010,28 @@ function renderScoreBreakdown(contributions, finalScore) {
 
 // ---- Hourly strip + best-window callout ----
 //
+// ---- Rec 3: Condition band ----
+// A thin horizontal strip of coloured segments showing the hourly score
+// across the climbable window (6am–7pm). Rendered inside the card header
+// so the shape of the day (green-then-grey, all-green, mostly-red) is
+// immediately visible without expanding the card. No labels needed —
+// green/amber/red communicates the pattern at a glance.
+function renderConditionBand(fc, mode) {
+  if (!mode) return ''; // only show on today/tomorrow tabs where hourly data is live
+  const hours = mode === 'today' ? fc?.todayHourly : fc?.tomorrowHourly;
+  if (!Array.isArray(hours) || hours.length === 0) return '';
+  const segments = hours.map(h => {
+    const b = scoreBand(h.score);
+    // Map band color to CSS variable token
+    const colorClass = b.color === 'success' ? 'band-success'
+      : b.color === 'primary' ? 'band-primary'
+      : b.color === 'warning' ? 'band-warning'
+      : 'band-error';
+    return `<span class="cond-seg ${colorClass}" title="${formatHour12(h.hour)}: ${h.score}"></span>`;
+  }).join('');
+  return `<div class="condition-band" aria-hidden="true">${segments}</div>`;
+}
+
 // Renders when the active date tab is today or tomorrow. Each cell covers one
 // hour and shows: time, weather icon, temp, sun-on-wall indicator, wind arrow
 // + bars + exposure tint, dryness, and the per-hour score (0–100). For the
@@ -1035,30 +1058,85 @@ function renderHourlyStrip(fc, mode = 'tomorrow') {
     const goodAllDay = (bw.runHours ?? 0) > 5
       && (bw.runStart ?? 99) <= 9
       && (bw.runEnd ?? 0) >= 18;
+
+    // --- Rec 1: directive language ---
+    // Find the first hour after the window that has meaningful rain coming
+    // (precip > 0.1mm or precipProb > 40%) so we can say "rain arrives ~Xpm".
+    // Only surface this hint when rain starts within 4h of the window end.
+    const windowEnd = goodAllDay ? (bw.runEnd ?? bw.end) : bw.end;
+    const rainArrivalHour = (() => {
+      const candidates = hours.filter(h => h.hour > windowEnd && (h.precip > 0.1 || h.precipProb > 40));
+      if (!candidates.length) return null;
+      const first = candidates[0].hour;
+      return first - windowEnd <= 4 ? first : null;
+    })();
+    const rainHint = rainArrivalHour != null ? ` · rain ~${formatHour12(rainArrivalHour)}` : '';
+
+    // Decide if window is already active (today strip, now is within the window).
+    const nowHourForDirective = mode === 'today'
+      ? (hours.find(h => h.isNow)?.hour ?? null)
+      : null;
+    const windowStart = goodAllDay ? (bw.runStart ?? bw.start) : bw.start;
+    const windowActive = nowHourForDirective != null
+      && nowHourForDirective >= windowStart
+      && nowHourForDirective < windowEnd;
+    const windowPast = nowHourForDirective != null && nowHourForDirective >= windowEnd;
+
     if (goodAllDay) {
       const band = scoreBand(runAvg);
       callout = `
         <div class="best-window-callout ${band.color}" title="Score ≥ 60 from ${formatHour12(bw.runStart)} through ${formatHour12(bw.runEnd)}">
-          <span class="best-window-label">✅ Good all day</span>
-          <span class="best-window-time">${formatHour12(bw.runStart)}–${formatHour12(bw.runEnd)}</span>
-          <span class="best-window-avg">avg ${runAvg}</span>
+          <div class="best-window-directive">Good all day</div>
+          <div class="best-window-sub">${formatHour12(bw.runStart)}–${formatHour12(bw.runEnd)} · avg ${runAvg}</div>
+        </div>
+      `;
+    } else if (windowPast) {
+      const band = scoreBand(avg);
+      callout = `
+        <div class="best-window-callout ${band.color} is-past" title="Window has passed">
+          <div class="best-window-directive">Window closed</div>
+          <div class="best-window-sub">${formatHour12(bw.start)}–${formatHour12(bw.end)} · avg ${avg}</div>
+        </div>
+      `;
+    } else if (windowActive) {
+      const band = scoreBand(avg);
+      callout = `
+        <div class="best-window-callout ${band.color}" title="You are currently in the best window">
+          <div class="best-window-directive">Good now${rainHint}</div>
+          <div class="best-window-sub">Window closes ${formatHour12(bw.end)} · avg ${avg}</div>
+        </div>
+      `;
+    } else if (windowStart != null && nowHourForDirective != null && windowStart <= 10 && windowStart - nowHourForDirective <= 1) {
+      // Window starts very soon (within the hour)
+      const band = scoreBand(avg);
+      callout = `
+        <div class="best-window-callout ${band.color}" title="Window starts soon">
+          <div class="best-window-directive">Go now${rainHint}</div>
+          <div class="best-window-sub">${formatHour12(bw.start)}–${formatHour12(bw.end)} · avg ${avg}</div>
+        </div>
+      `;
+    } else if (rainArrivalHour != null) {
+      const band = scoreBand(avg);
+      callout = `
+        <div class="best-window-callout ${band.color}" title="Best window before rain arrives">
+          <div class="best-window-directive">Go early · rain ~${formatHour12(rainArrivalHour)}</div>
+          <div class="best-window-sub">${formatHour12(bw.start)}–${formatHour12(bw.end)} · avg ${avg}</div>
         </div>
       `;
     } else {
       const band = scoreBand(avg);
       callout = `
         <div class="best-window-callout ${band.color}" title="Best ${bw.count}h block with score ≥ 60 (capped at 5h)">
-          <span class="best-window-label">🎯 Best ${bw.count}h block</span>
-          <span class="best-window-time">${formatHour12(bw.start)}–${formatHour12(bw.end)}</span>
-          <span class="best-window-avg">avg ${avg}</span>
+          <div class="best-window-directive">Best window</div>
+          <div class="best-window-sub">${formatHour12(bw.start)}–${formatHour12(bw.end)} · avg ${avg}</div>
         </div>
       `;
     }
   } else {
     callout = `
       <div class="best-window-callout muted" title="No continuous 2h+ window scored ≥ 60">
-        <span class="best-window-label">🎯 Best window</span>
-        <span class="best-window-time">No standout window</span>
+        <div class="best-window-directive">Marginal day</div>
+        <div class="best-window-sub">No standout window</div>
       </div>
     `;
   }
