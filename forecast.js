@@ -722,6 +722,23 @@ function scoreHour(crag, h) {
   if (h.wind > 50) s -= 15;
   else if (h.wind > 35) s -= 5;
 
+  // Humidity — mirror of the daily dwell model, applied per-hour so the hourly
+  // strip stays consistent with the day-card chips. Scaled by per-crag rock
+  // sensitivity (porous granite at dryRating 5 shrugs off humidity; soft rock
+  // at dryRating 1 is much more sensitive).
+  if (h.humidity != null) {
+    const humSens = Math.max(0.25, (6 - (crag.dryRating ?? 3)) / 4);
+    if (h.humidity >= 75) {
+      s -= Math.round(6 * humSens);          // muggy hour
+      if (h.temp >= 22) s -= 2;              // warm + sticky → poor friction
+      else if (h.temp <= 8) s -= 2;          // damp cold → won't dry or warm up
+    } else if (h.humidity >= 60) {
+      s -= Math.round(2 * humSens);          // borderline moderate
+    } else if (h.humidity < 50 && h.temp >= 10 && h.temp <= 22) {
+      s += 1;                                // crisp friction bonus
+    }
+  }
+
   // Sun-on-wall interactions. h.sunOnWall is null for mixed-aspect parents —
   // skip these tweaks rather than guess (children carry the real aspect).
   if (h.sunOnWall === true) {
