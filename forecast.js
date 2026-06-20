@@ -1048,6 +1048,7 @@ function climbableRain(day, startH, cutoffH) {
   }
   let sumDuring = 0;
   let peakDuring = 0;
+  let probHours = 0;      // accumulated peakProb × overlap hours — for weighted mean
   let sumBeforeClimb = 0; // rain that finished before climbing starts (e.g. dawn shower)
   let sumAfter = 0;       // rain after cutoff (post-dark)
   for (const w of windows) {
@@ -1075,11 +1076,19 @@ function climbableRain(day, startH, cutoffH) {
     if (w.peakHour >= overlapStart && w.peakHour < overlapEnd) {
       peakDuring = Math.max(peakDuring, w.peakProb);
     }
+    // Accumulate prob × overlap hours for the time-weighted mean.
+    // Uses the window's peakProb as a proxy for the whole window — conservative
+    // (it's the worst hour) but avoids needing per-hour arrays here.
+    probHours += w.peakProb * Math.max(0, overlapEnd - overlapStart);
   }
+  // Time-weighted mean probability across all climbable hours.
+  // Unrainy hours contribute 0, so this naturally dilutes a single late spike.
+  const climbSpan = Math.max(1, cutoffH - startH);
+  const weightedProb = Math.round(probHours / climbSpan);
   // "allAfterDark" preserved for the existing skipLateRain shortcut — true when
   // nothing meaningful fell during climbing hours but there's rain after cutoff.
   const allAfterDark = sumDuring < 0.2 && sumAfter >= 0.2;
-  return { sum: sumDuring, peakProb: peakDuring, allAfterDark, sumBeforeClimb, sumAfter };
+  return { sum: sumDuring, peakProb: peakDuring, weightedProb, allAfterDark, sumBeforeClimb, sumAfter };
 }
 
 // True if the next day is climbable in the morning (no early rain, low daily rain total).
@@ -1142,7 +1151,12 @@ export function scoreDay(crag, day, prevDay, nextDay) {
   // robust enough to use unconditionally — morning-only rain shouldn't tank the
   // score for an otherwise dry afternoon.
   const effectiveSum = climb.sum;
-  const effectiveProb = climb.peakProb;
+  // weightedProb: time-weighted mean prob across climbable hours (dilutes a single
+  // late-afternoon spike across the whole climbing day). Used for penalty thresholds.
+  // peakProb: the worst single hour — kept for the detail string so users still
+  // see the actual peak risk.
+  const effectiveProb = climb.weightedProb ?? climb.peakProb;
+  const peakProb = climb.peakProb;
   // Late-rain flag retained for the "rain after dark only" reason string.
   const skipLateRain = climb.allAfterDark && nextMorningDry(nextDay);
 
@@ -1383,7 +1397,7 @@ export function scoreDay(crag, day, prevDay, nextDay) {
   } else if (skipLateRain) {
     rainDetail = `${effectiveSum.toFixed(1)}mm during climbable hours (rain after dark ignored)`;
   } else {
-    rainDetail = `${effectiveSum.toFixed(1)}mm forecast · ${Math.round(effectiveProb)}% peak chance`;
+    rainDetail = `${effectiveSum.toFixed(1)}mm forecast · ${Math.round(peakProb)}% peak chance (${Math.round(effectiveProb)}% avg across climbing hours)`;
   }
   if (effectiveSum > 5) {
     score -= 60;
@@ -1395,7 +1409,7 @@ export function scoreDay(crag, day, prevDay, nextDay) {
     add('precip', 'Showers likely', -30, rainDetail);
   } else if (effectiveProb > 60) {
     score -= 20;
-    reasons.push(`${Math.round(effectiveProb)}% rain chance`);
+    reasons.push(`${Math.round(peakProb)}% rain chance`);
     add('precip', 'Rain chance', -20, rainDetail);
   } else if (effectiveProb > 30) {
     score -= 8;
