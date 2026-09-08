@@ -27,6 +27,16 @@
   </head>
 
   <body>
+    <div class="app-migrate-banner" id="app-migrate-banner" hidden>
+      <p class="app-migrate-copy">
+        <strong>SendTemps is now Climbable</strong>, a fully featured native iOS app with conditions for 200+ crags across Australia. Get the app.
+      </p>
+      <div class="app-migrate-actions">
+        <a class="app-migrate-cta" href="https://apps.apple.com/au/app/climbable/id6804840351" target="_blank" rel="noopener">Get the app</a>
+        <button type="button" class="app-migrate-dismiss" id="app-migrate-dismiss" aria-label="Dismiss">&times;</button>
+      </div>
+    </div>
+
     <header class="topbar">
       <div class="brand">
         <svg class="brand-mark" width="28" height="28" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -99,6 +109,36 @@
         };
         ping();
       });
+    </script>
+    <script>
+      // Migration banner: this is the original SendTemps PWA, superseded by
+      // the Climbable native app and the climbable.app/webapp/ successor.
+      // Nudge any remaining installed/returning users toward the App Store.
+      // Dismissible per session so it doesn't nag on every open, but
+      // reappears after a few days so recurring installed-PWA users still see it.
+      (function () {
+        var DISMISS_KEY = 'climbable_migrate_dismissed_at';
+        var DISMISS_DAYS = 3;
+        var banner = document.getElementById('app-migrate-banner');
+        var dismissBtn = document.getElementById('app-migrate-dismiss');
+        if (!banner || !dismissBtn) return;
+
+        function isDismissed() {
+          var ts = localStorage.getItem(DISMISS_KEY);
+          if (!ts) return false;
+          var elapsedDays = (Date.now() - Number(ts)) / (1000 * 60 * 60 * 24);
+          return elapsedDays < DISMISS_DAYS;
+        }
+
+        if (!isDismissed()) {
+          banner.hidden = false;
+        }
+
+        dismissBtn.addEventListener('click', function () {
+          banner.hidden = true;
+          localStorage.setItem(DISMISS_KEY, String(Date.now()));
+        });
+      })();
     </script>
   </body>
 </html>
