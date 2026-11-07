@@ -1,144 +1,49 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
-    <meta name="theme-color" content="#1a1815" media="(prefers-color-scheme: dark)" />
-    <meta name="theme-color" content="#f7f4ee" media="(prefers-color-scheme: light)" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="SendTemps" />
-    <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="description" content="Weekend climbing forecast for Melbourne crags — Camel's Hump, Falcons, Cathedral, You Yangs, Arapiles, Grampians." />
-
-    <title>SendTemps — Melbourne Weekend Forecast</title>
-
-    <link rel="manifest" href="manifest.webmanifest" />
-    <link rel="apple-touch-icon" href="icon-180.png" />
-    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
-
-    <!-- Fontshare: General Sans (display) + Switzer (body) — both clean, high-legibility sans-serifs -->
-    <link
-      href="https://api.fontshare.com/v2/css?f[]=general-sans@500,600,700&f[]=switzer@400,500,600,700&display=swap"
-      rel="stylesheet"
-    />
-
-    <link rel="stylesheet" href="style.css?v=36" />
-  </head>
-
-  <body>
-    <div class="app-migrate-banner" id="app-migrate-banner" hidden>
-      <p class="app-migrate-copy">
-        <strong>SendTemps is now Climbable</strong>, a fully featured native iOS app with conditions for 200+ crags across Australia.
-      </p>
-      <div class="app-migrate-actions">
-        <a class="app-migrate-cta" href="https://apps.apple.com/au/app/climbable/id6804840351" target="_blank" rel="noopener">Get the app</a>
-        <button type="button" class="app-migrate-dismiss" id="app-migrate-dismiss" aria-label="Dismiss">&times;</button>
-      </div>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#183d2a">
+  <meta name="description" content="SendTemps has become Climbable. Discover climbing conditions across Australia in the Climbable iPhone app.">
+  <meta http-equiv="Cache-Control" content="no-cache">
+  <title>SendTemps is now Climbable</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; min-height: 100dvh; background: #183d2a; color: #f7f4ee; display: grid; place-items: center; padding: 36px 22px; }
+    main { width: min(100%, 540px); text-align: center; }
+    .eyebrow { display: block; margin-bottom: 22px; color: #c7ddc5; font-size: 12px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; }
+    .mark { width: 74px; height: 74px; margin: 0 auto 28px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.26); border-radius: 22px; }
+    .mark svg { width: 46px; height: 46px; }
+    h1 { margin: 0 0 20px; font-size: clamp(38px, 8vw, 64px); font-weight: 750; letter-spacing: -.055em; line-height: 1.06; }
+    p { max-width: 460px; margin: 0 auto 30px; color: #d5e2d5; font-size: 17px; line-height: 1.65; }
+    .cta { display: inline-block; width: min(100%, 340px); padding: 17px 24px; border-radius: 11px; background: #f7f4ee; color: #183d2a; font-size: 16px; font-weight: 750; text-decoration: none; transition: background .15s; }
+    .cta:hover, .cta:focus-visible { background: #dcebdc; }
+    .note { display: block; margin-top: 23px; color: #b4c8b6; font-size: 13px; line-height: 1.5; }
+    .note a { color: #f7f4ee; text-underline-offset: 3px; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 39 16 18l8 11L32 12l12 27H4Z"/><circle cx="32" cy="6" r="2" fill="currentColor" stroke="none"/></svg>
     </div>
-
-    <header class="topbar">
-      <div class="brand">
-        <svg class="brand-mark" width="28" height="28" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M3 26 L11 12 L17 19 L22 9 L29 26 Z" />
-          <circle cx="22" cy="6" r="1.6" fill="currentColor" stroke="none" />
-        </svg>
-        <h1>SendTemps</h1>
-      </div>
-      <button class="theme-toggle" data-theme-toggle aria-label="Toggle dark mode"></button>
-    </header>
-
-    <main id="app">
-      <div class="loading" id="loading">
-        <div class="spinner"></div>
-        <p>Reading the wind…</p>
-      </div>
-
-      <div id="content" hidden>
-        <section class="weekend-tabs" id="day-tabs" role="tablist" aria-label="Forecast day"></section>
-
-        <section class="day-summary" id="day-summary" aria-live="polite"></section>
-
-        <section class="ranked-list" id="ranked-list"></section>
-
-        <footer class="footnote">
-          <p>Forecast: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>. Conditions are predictions — always check on arrival. Aspect, dry-time and ideal-temp ratings are author's notes, not gospel.</p>
-          <p class="updated" id="updated"></p>
-        </footer>
-      </div>
-
-      <div class="error" id="error" hidden>
-        <h2>Couldn't fetch forecast</h2>
-        <p id="error-message"></p>
-        <button id="retry">Retry</button>
-      </div>
-    </main>
-
-    <script type="module" src="app.js?v=60.2"></script>
-
-    <!--
-      GoatCounter analytics — cookie-free, no banner needed.
-      Tracks pageviews + screen size + referrer; no personal data.
-      Dashboard: https://sendtemps.goatcounter.com
-    -->
-    <script
-      data-goatcounter="https://sendtemps.goatcounter.com/count"
-      async
-      src="//gc.zgo.at/count.js"
-    ></script>
-    <script>
-      // Fire a custom event the first time the page loads so we can split
-      // "installed PWA" usage from regular browser visits in GoatCounter.
-      // display-mode: standalone is set when launched from the iOS home
-      // screen or Android "Add to home screen". navigator.standalone is
-      // the older iOS Safari flag. Either one means installed PWA.
+    <span class="eyebrow">A new chapter for SendTemps</span>
+    <h1>SendTemps is now Climbable.</h1>
+    <p>We've retired the original SendTemps forecasts. For climbing conditions across Australia, better crag planning and weather alerts, find us on Climbable for iPhone.</p>
+    <a class="cta" href="https://apps.apple.com/au/app/climbable/id6804840351">Get Climbable on the App Store ↗</a>
+    <span class="note">Want to learn more? Visit <a href="https://climbable.app/">climbable.app</a>.</span>
+  </main>
+  <script>
+    // Refresh the existing PWA service worker so returning users receive this page.
+    if ('serviceWorker' in navigator) {
       window.addEventListener('load', function () {
-        var isStandalone = window.matchMedia('(display-mode: standalone)').matches
-          || window.navigator.standalone === true;
-        if (!isStandalone) return;
-        // Wait a tick for count.js to finish loading, then log the event.
-        var ping = function () {
-          if (typeof window.goatcounter === 'undefined' || !window.goatcounter.count) {
-            return setTimeout(ping, 200);
-          }
-          window.goatcounter.count({
-            path: 'pwa-launch',
-            title: 'PWA launch',
-            event: true,
-          });
-        };
-        ping();
+        navigator.serviceWorker.register('./sw.js').then(function (registration) {
+          registration.update().catch(function () {});
+        }).catch(function () {});
       });
-    </script>
-    <script>
-      // Migration banner: this is the original SendTemps PWA, superseded by
-      // the Climbable native app and the climbable.app/webapp/ successor.
-      // Nudge any remaining installed/returning users toward the App Store.
-      // Dismissible per session so it doesn't nag on every open, but
-      // reappears after a few days so recurring installed-PWA users still see it.
-      (function () {
-        var DISMISS_KEY = 'climbable_migrate_dismissed_at';
-        var DISMISS_DAYS = 3;
-        var banner = document.getElementById('app-migrate-banner');
-        var dismissBtn = document.getElementById('app-migrate-dismiss');
-        if (!banner || !dismissBtn) return;
-
-        function isDismissed() {
-          var ts = localStorage.getItem(DISMISS_KEY);
-          if (!ts) return false;
-          var elapsedDays = (Date.now() - Number(ts)) / (1000 * 60 * 60 * 24);
-          return elapsedDays < DISMISS_DAYS;
-        }
-
-        if (!isDismissed()) {
-          banner.hidden = false;
-        }
-
-        dismissBtn.addEventListener('click', function () {
-          banner.hidden = true;
-          localStorage.setItem(DISMISS_KEY, String(Date.now()));
-        });
-      })();
-    </script>
-  </body>
+    }
+  </script>
+</body>
 </html>
